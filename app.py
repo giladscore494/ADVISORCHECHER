@@ -172,13 +172,17 @@ if start:
     store = get_store()
     if store is not None:
         limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps), int(max_api_calls))
-        if run_mode() == "inline":
-            run_id = run_inline(store, domain.strip(), instructions.strip(), limits, provider)
+        try:
+            if run_mode() == "inline":
+                run_id = run_inline(store, domain.strip(), instructions.strip(), limits, provider)
+            else:
+                run_id, _ = research_runner.start(store, domain.strip(), instructions.strip(), limits, provider,
+                                                  llm_factory=lambda p: llm.LLMClient(p))
+        except research_store.StoreError as exc:
+            st.error(f"Could not start the run: the research store is unavailable ({md(exc)}).")
         else:
-            run_id, _ = research_runner.start(store, domain.strip(), instructions.strip(), limits, provider,
-                                              llm_factory=lambda p: llm.LLMClient(p))
-        st.session_state["run_id"] = run_id
-        st.query_params["run"] = run_id
+            st.session_state["run_id"] = run_id
+            st.query_params["run"] = run_id
 
 # ----------------------------------------------------------------- results
 def source_mark(s) -> str:
@@ -441,8 +445,7 @@ def show_run(run_id: str) -> None:
     st.divider()
     st.subheader(f"Results: {record.get('domain') or ''}")
     if record["status"] == "running":
-        if research_runner.is_active(run_id) or run_mode() != "inline":
-            st.fragment(show_live, run_every=3)(run_id)
+        st.fragment(show_live, run_every=3)(run_id)
         return
     show_run_header(record)
     state = record.get("state") or {}

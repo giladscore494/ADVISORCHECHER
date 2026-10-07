@@ -30,9 +30,13 @@ further business and professional legal validation.
 ## Architecture
 
 ```
-app.py        Streamlit UI: input, live progress, result cards, research trace
-agent.py      Controlled tool-calling loop, limits, duplicate detection, trace, finalization
-llm.py        Provider-agnostic chat client (Kimi by default, GLM ready) over the OpenAI-compatible API
+app.py        Streamlit UI: input, provider choice, snapshot freshness, run status/recovery, results, trace
+agent.py      Controlled tool-calling loop, limits, duplicate detection, trace, checkpoints, resume, finalization
+llm.py        Provider-agnostic client: Kimi / GLM (Chat Completions) and OpenAI gpt-6.1-sol (Responses API)
+local_data.py Indexed (SQLite FTS5 + customs-code) queries over the validated government snapshots
+research_store.py   Durable run store (SQLite or PostgreSQL): checkpoints, status, reports
+research_runner.py  Background worker thread + heartbeat; start / resume / recover runs
+partial_report.py   Fallback report built only from persisted evidence (no model call)
 search.py     search_web(query, num_results) via Serper, plus primary-source domain detection
 fetcher.py    fetch_url(url): HTML, PDF, JSON, CSV, XLSX; retries, robots.txt, SSRF and size limits
 datagov.py    data.gov.il CKAN client (package_search/package_show/resource_show/datastore_search) and
@@ -41,8 +45,11 @@ evidence.py   Hebrew/English term matching (dataset relevance) and quoted-excerp
 prompts.py    System prompt (research strategy, red team, legal safety), final-report prompt
 models.py     Pydantic schema for the final report, strict JSON parsing and validation, ranking
 config.py     Settings from environment, .env, or Streamlit secrets
-scripts/      smoke_datagov.py: optional read-only live check against data.gov.il
-tests/        Unit tests plus a Streamlit AppTest UI test (all network calls mocked)
+scripts/      sync_government_data.py: complete, validated data.gov.il snapshots (run by GitHub Actions)
+              smoke_datagov.py: optional read-only live check against data.gov.il
+data/government/  manifest.json + versioned snapshots (snapshots/<dataset>/<version>/records.jsonl.gz)
+.github/workflows/  sync-government-data.yml (daily + manual), its branch test, tests.yml (pytest on PRs)
+tests/        Unit, recovery (real process kill), PostgreSQL, AppTest UI and live data.gov.il tests
 ```
 
 ### Agent loop
@@ -52,7 +59,12 @@ The model gets these tools:
 - `fetch_url`: read an individual law, regulation, guidance page or PDF.
 - `search_government_datasets`, `inspect_government_dataset`, `read_government_resource`: structured
   official data from data.gov.il (see below).
+- `list_local_government_datasets`, `search_local_government_records`, `get_local_government_record`,
+  `get_government_snapshot_status`: the complete local snapshots (see below), queried first for customs,
+  import-requirement and standards questions.
 - `update_candidates`: records the candidate funnel.
+- `record_findings`: saves findings (statement + source + exact excerpt, checked immediately) and open
+  questions as they are established, so they survive a later failure.
 
 Each step:
 
@@ -101,8 +113,15 @@ Both files are git-ignored. Never commit credentials.
 | `MAX_SEARCHES` / `MAX_FETCHES` / `MAX_CKAN_CALLS` | no | `30` / `20` / `40` | Defaults for the UI settings |
 | `CKAN_BASE_URL` | no | `https://data.gov.il/api/3/action/` | CKAN API base |
 | `CKAN_USER_AGENT` | no | `RegulatoryOpportunityHunter/0.1 (...)` | Honest client identifier sent to the API; set it if data.gov.il documents a required client header |
-| `LLM_PROVIDER` | no | `kimi` | `kimi` or `glm` |
+| `LLM_PROVIDER` | no | `kimi` | Default provider in the UI: `kimi`, `glm` or `openai` |
 | `GLM_API_KEY`, `GLM_BASE_URL`, `GLM_MODEL` | if `glm` | `https://api.z.ai/api/paas/v4`, `glm-5.3` | |
+| `OPENAI_API_KEY` | if `openai` | | Server-side only |
+| `OPENAI_MODEL` / `OPENAI_REASONING_EFFORT` / `OPENAI_BASE_URL` | no | `gpt-6.1-sol` / `high` / `https://api.openai.com/v1` | Responses API |
+| `RESEARCH_STORE_URL` | recommended | SQLite `.research_runs/runs.sqlite` | `postgresql://user:pass@host:5432/db` for durable recovery on hosts with ephemeral disks (Streamlit Community Cloud), or `sqlite:////abs/path.sqlite` |
+| `RESEARCH_RUN_MODE` | no | `background` | `background` (worker thread, page polls the store) or `inline` (runs inside the page script; tests) |
+| `RESEARCH_LIST_RUNS` | no | `0` | `1` lists recent runs in "Recover previous run" (only for private, single-user deployments) |
+| `GOVDATA_DIR` / `GOVDATA_CACHE_DIR` | no | `data/government` / system temp | Snapshot location / where the SQLite index and release assets are cached |
+| `GOVDATA_WARMUP` | no | `1` | Build the local index in the background when the app starts |
 
 ## Model
 
@@ -168,6 +187,129 @@ along with every failed API request.
 
 **Live smoke test** (read-only, a few calls): `python scripts/smoke_datagov.py "רכב"`.
 
+## OpenAI provider (gpt-6.1-sol)
+
+Choose **OpenAI** in the "Model provider" selector (or `LLM_PROVIDER=openai`). The adapter in `llm.py` uses
+the **Responses API with function calling**: `model=gpt-6.1-sol`, `reasoning={"effort": "high"}`,
+`store=false`, `include=["reasoning.encrypted_content"]`. It sends exactly the app's own function tools
+(Serper `search_web`, `fetch_url`, the live CKAN tools, the local dataset tools, `update_candidates`,
+`record_findings`); OpenAI built-in tools such as web search are never enabled, so legal discovery stays on
+Serper and every tool runs inside this app. The internal chat-style history is converted on every call
+(`function_call` / `function_call_output` items), and encrypted reasoning items are kept in the history so
+a checkpointed run can be resumed. If an endpoint rejects replayed reasoning items, the adapter continues
+without them. Kimi and GLM keep using Chat Completions unchanged. API keys are read server-side only
+(environment, `.env`, Streamlit secrets); they are never shown in the UI and are redacted from stored runs.
+
+## Government dataset snapshots
+
+`scripts/sync_government_data.py` downloads **complete** official datasets from data.gov.il and the
+`Sync government data` workflow (`.github/workflows/sync-government-data.yml`) runs it daily
+(02:23 UTC) and on demand (`workflow_dispatch`, inputs `force` and `only`).
+
+| Key | Resource id | Official resource |
+|---|---|---|
+| `customs_tariff` | `5536eaa1-2e51-406b-aff6-b9ca02801b7c` | ספר סיווג טובין ביבוא - תעריף המכס ומס קניה (Israel Tax Authority) |
+| `free_import_order` | `a36db570-09f2-4521-8e3d-0290eb839c68` | דרישות חוקיות - צו יבוא חופשי (Israel Tax Authority) |
+| `mandatory_standards` | `1a4d94e2-369a-488d-a223-eb1020612fbd` | מאגר תקנים רשמיים (Ministry of Economy) |
+| `import_regulations` | `d9750b40-c0b9-4e05-a08e-ae768a92e9ca` | דרישות חוקיות - צוים נוספים (Israel Tax Authority) |
+| `standards_declarations` | `d8611d0e-f5c8-4552-8615-da37e920f07b` | אכרזת תקנים ברשומות (Ministry of Economy) |
+
+For every resource the script:
+1. reads official metadata with `resource_show` and `package_show` (dataset, publisher, license, dates);
+2. discovers the retrieval method: the DataStore when `datastore_active`, otherwise the resource's official
+   download URL (CSV / XLSX / JSON);
+3. reads the full-table total with `datastore_search?limit=0` (no `q`, no filters: **not** a search-result
+   count), pages through every row ordered by `_id`, and re-reads the total afterwards;
+4. validates: rows == official total, `_id` strictly increasing and unique, the same schema on every page and
+   record, non-empty, and no unexplained shrink (> 50%) versus the previous snapshot;
+5. writes UTF-8 JSONL exactly as served (deterministic gzip) plus `snapshot.json` (dataset name, publisher,
+   retrieval date, resource id, license, row count, source URL, API URL, schema, validation results, SHA-256
+   of the content and of the file) into a temporary directory, re-reads and re-checks it from disk, then
+   atomically renames it into place and atomically rewrites `data/government/manifest.json`.
+
+A failed, blocked or incomplete download never replaces the last complete snapshot: the manifest keeps
+pointing at it and records the failed attempt. Unchanged datasets are skipped (fingerprint of official
+metadata + DataStore total); a full re-download is forced every 7 days and creates a new version only if the
+content checksum changed. Requests are read-only GETs, spaced >= 1 s apart, with timeouts and exponential
+backoff for 429/5xx/connection errors only; HTTP 401/403 is never retried or bypassed.
+
+Storage: snapshots up to 45 MiB (gzip) are committed to the repository; larger ones are published as a
+GitHub Release asset (`govdata-<key>-<version>`) with the manifest still committed, and the app downloads
+them from the release URL and verifies their SHA-256. Nothing is ever truncated. The workflow uses minimal
+permissions (`contents: write` on the job only), a concurrency group that never cancels a running sync,
+job/step timeouts, `--verify` of every snapshot before committing, real read-only live tests
+(`tests/test_live_datagov.py`: live totals and sampled live records must equal the snapshot exactly), and
+uploads `sync.log` / `live-tests.log` / the manifest as a run artifact.
+`sync-government-data-branch-test.yml` runs the same job when the sync code changes on a `claude/**` branch
+(`workflow_dispatch` only works once a workflow is on the default branch).
+
+The Streamlit app reads the snapshots from its own checkout (Streamlit Cloud redeploys on each commit), so
+no Serper or model call is needed to obtain them.
+
+## Local government data tools
+
+`local_data.py` builds a SQLite index once per snapshot version (about 15 s for all five datasets, in a
+background thread at app start; cached in `GOVDATA_CACHE_DIR`): an FTS5 full-text index with Hebrew
+prefix-stripped variants (ו/ה/ב/ל/מ/ש/כ) and English terms across all fields, and a customs-code table over
+classification fields. Customs queries such as `8703.23.30.00/0`, `87032330`, `87.03` return **exact**
+matches, **parent** heading/chapter rows and **child** items, in that order (check digits are ignored;
+numeric columns whose leading zero was lost in the DataStore are restored). A code-like query that is not a
+tariff item (e.g. a standard number `1347`) falls back to text search.
+
+The model never receives a dataset: every query returns at most 25 records (trimmed further to fit the
+context budget), each with its exact field values, record id, a quotable `record_line`, the snapshot
+version and provenance (resource id, publisher, license, source URL, retrieval and verification dates).
+Zero matches comes with an explicit note that it is not proof of an exemption. Local records count as
+**dataset evidence**, never as legally binding text: a claim supported only by dataset evidence is never
+class A. The live CKAN tools remain for freshness checks, records missing locally and other datasets, and
+Serper / `fetch_url` remain the independent legal-source verification path. The UI shows each snapshot's
+date, last official verification and freshness (fresh <= 2 days, aging <= 8, stale beyond).
+
+## Durable research, recovery and partial reports
+
+Every run gets a unique run ID (`YYYYMMDD-HHMMSS-<64 random bits>`, also put in the page URL as `?run=`)
+and is executed by `research_runner.py` in a worker thread owned by the server process, so Streamlit
+reruns, widget clicks and browser disconnects do not stop it. The agent checkpoints its **complete,
+resumable state** (instructions and configuration, the conversation, searches, retrieved content and
+dataset evidence with provenance, candidates and status, recorded findings with verification, open
+questions, counters, token usage, API errors, current phase, timestamp) to the research store:
+
+- after every model response and every completed tool call,
+- at every research phase change,
+- before every final-report model call and after receiving it,
+- immediately when an error is caught (model, Serper, data.gov.il, local data, unexpected exceptions).
+
+A heartbeat thread refreshes the run every 20 s while the worker is alive; a "running" run without a
+heartbeat for 120 s is reported as **interrupted** (server restart, crash, container recycling). Status is
+one of running / completed / failed / interrupted.
+
+Recovery: the results area shows the run ID, status, last successful checkpoint and progress, and offers
+**Download partial report** (Markdown / JSON), **Download research trace** (JSON), **Resume research from
+last checkpoint**, and **Recover previous run** by run ID. Resume restores the exact conversation and
+evidence and continues with the remaining budget; if the process died between a model response and its tool
+results, the missing tool results are answered as "interrupted, call again". A run that died during
+finalization resumes at finalization without repeating research.
+
+If the final JSON report cannot be produced or validated (model error, timeout, invalid JSON twice, crash),
+`partial_report.py` builds a report **only from saved evidence**, without a model call: VERIFIED findings
+(official source retrieved in this run and the excerpt found in it), UNVERIFIED findings, candidates labelled
+as WORKING HYPOTHESES, official / non-official / failed sources, dataset evidence (labelled as not legal
+text), searches, open questions, API errors, and any rejected model draft labelled UNVALIDATED.
+
+Storage (`RESEARCH_STORE_URL`):
+- **PostgreSQL** (recommended for Streamlit Community Cloud or any host with an ephemeral disk), e.g. a free
+  Supabase / Neon database: `postgresql://user:password@host:5432/dbname`. Tables are created automatically.
+- **SQLite** (default `.research_runs/runs.sqlite`, WAL + `synchronous=FULL`): survives process restarts on
+  the same disk, **not** container replacement or redeploys; the UI says so.
+
+Research content is private: it is stored only in this store (git-ignored locally), never in the repository;
+known API keys are redacted before anything is written. Run IDs are unguessable; listing recent runs in the
+UI is off unless `RESEARCH_LIST_RUNS=1` (the app has no authentication; enable it only on private deploys).
+
+Crash recovery is tested with a real process kill: `tests/test_recovery.py` starts a worker process, lets
+it research, sends SIGKILL (mid-research and during final JSON generation), then verifies that a new process
+sees the run as interrupted, can build the partial report, and resumes it to a verified final report.
+
 ## Source fetching
 
 `fetcher.fetch_url(url)`:
@@ -219,6 +361,16 @@ python -m pytest -q
 ```
 
 These cover:
+- complete multi-page snapshot downloads, exact counts, duplicate / overlap detection, schema checks,
+  atomic replacement, failed downloads keeping the previous snapshot, incremental skips, release storage
+- local indexed queries (exact / parent / child customs codes, Hebrew prefixes, English terms, filters,
+  provenance, zero-result notes) on synthetic snapshots and on the real committed snapshots
+- the research store on SQLite and on a real throwaway PostgreSQL server (skipped if not installed)
+- checkpoints after every tool call, crash during final JSON generation, invalid final JSON, resume,
+  KeyboardInterrupt, and a real SIGKILL of a worker process followed by recovery and resume
+- the OpenAI Responses adapter, including an end-to-end run where the model drives Serper, fetch_url and
+  local data tools; Serper request construction and errors
+- the recovery UI (partial report, downloads, resume, recover by ID, interrupted detection, background runs)
 - HTML, PDF, JSON, CSV and XLSX parsing; retries, 403 handling and robots.txt
 - the data.gov.il CKAN client and pipeline, using a mocked API with realistic fixtures
 - relevance rejection, provenance and excerpt verification
@@ -226,7 +378,8 @@ These cover:
 - the LLM client (mocked SDK responses)
 - the Streamlit UI flow (`streamlit.testing.v1.AppTest`)
 
-No API keys or network access are needed.
+No API keys or network access are needed. Real read-only data.gov.il integration tests run with
+`RUN_LIVE_GOV_TESTS=1 python -m pytest -m live` (the sync workflow runs them after every sync).
 
 ## Known MVP limitations
 
@@ -234,7 +387,12 @@ No API keys or network access are needed.
 - Some gov.il pages render content client-side or block automated clients, so the agent may need to fall
   back to PDFs or other mirrors of the official text.
 - Progress updates arrive per tool call. A long model call (max reasoning) shows no intermediate updates.
-- Everything is kept in memory for one session. There is no persistence or authentication; caching is per run.
+- There is no authentication. Runs are recoverable by their unguessable run ID; do not share it.
+- Resuming continues the saved conversation; a model call that was in flight when the process died is
+  repeated (and billed) again. With the default SQLite store, recovery does not survive container
+  replacement: configure PostgreSQL for that.
+- The background worker lives in the Streamlit server process. A crash is recoverable (resume), but a run
+  does not continue by itself while no server process is running.
 - Dataset relevance and excerpt checks are lexical. They reject clearly unrelated datasets and unquoted claims,
   but they cannot confirm that a quoted passage legally means what the model says it means.
 - Output quality depends entirely on the model's research. Always check the cited sources yourself.
