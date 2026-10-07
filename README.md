@@ -12,6 +12,9 @@ further business and professional legal validation.
 ## What it does
 
 1. You enter a domain (e.g. *equipment rental*, *mandatory inspections*, *waste and recycling*) and click **Start Research**.
+   Optionally add **Custom Research Instructions** (Hebrew or English): goals, business constraints, priorities,
+   exclusions or questions. They steer the research but cannot override the legal safeguards, source
+   verification, red-team process or run limits, and they are shown in the Research Trace.
 2. The agent works on its own, in Hebrew and English: it maps the regulatory environment, searches for
    laws and regulations, reads the actual sources (HTML and PDF), generates candidate mechanisms,
    **red-teams** each one (looking for overriding laws, licensing, standards, zoning, tax and so on),

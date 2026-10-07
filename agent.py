@@ -7,6 +7,7 @@ report, validate it, and retry once if it is malformed.
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -15,7 +16,13 @@ from urllib.parse import urlparse, urlunparse
 from fetcher import fetch_url
 from llm import LLMError, parse_tool_arguments
 from models import ResearchResult, parse_research_result, rank_opportunities
-from prompts import FINALIZE_PROMPT, REPAIR_PROMPT, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from prompts import (
+    CUSTOM_INSTRUCTIONS_TEMPLATE,
+    FINALIZE_PROMPT,
+    REPAIR_PROMPT,
+    SYSTEM_PROMPT,
+    USER_PROMPT_TEMPLATE,
+)
 from search import SearchError, is_primary_source, search_web
 
 PHASES = {
@@ -91,6 +98,7 @@ TOOLS = [
 ]
 
 MAX_NO_PROGRESS_ROUNDS = 3
+MAX_INSTRUCTIONS_CHARS = 5000
 NO_RESULT_MESSAGE = "No sufficiently strong opportunity found."
 
 
@@ -280,16 +288,31 @@ class ResearchAgent:
         })
         return resp
 
-    def run(self, domain: str) -> RunResult:
+    def build_user_message(self, domain: str, instructions: str = "") -> str:
+        lim = self.limits
+        content = USER_PROMPT_TEMPLATE.format(
+            domain=domain, max_steps=lim.max_steps, max_searches=lim.max_searches,
+            max_fetches=lim.max_fetches, max_opportunities=lim.max_opportunities)
+        if instructions:
+            # Keep the user's text inside its delimiters so it cannot pose as system text.
+            safe = re.sub(r"<\s*/?\s*custom_instructions\s*>", "", instructions, flags=re.IGNORECASE)
+            content += CUSTOM_INSTRUCTIONS_TEMPLATE.format(instructions=safe)
+        return content
+
+    def run(self, domain: str, instructions: str = "") -> RunResult:
         run = RunResult(domain=domain, trace=self.trace)
         lim = self.limits
+        instructions = (instructions or "").strip()
+        if len(instructions) > MAX_INSTRUCTIONS_CHARS:
+            instructions = instructions[:MAX_INSTRUCTIONS_CHARS]
+            self.trace["warnings"].append(f"Custom instructions truncated to {MAX_INSTRUCTIONS_CHARS} characters.")
+        self.trace["custom_instructions"] = instructions
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_PROMPT_TEMPLATE.format(
-                domain=domain, max_steps=lim.max_steps, max_searches=lim.max_searches,
-                max_fetches=lim.max_fetches, max_opportunities=lim.max_opportunities)},
+            {"role": "user", "content": self.build_user_message(domain, instructions)},
         ]
-        self._emit(f"Starting research on: {domain}", "start")
+        suffix = " (with custom instructions)" if instructions else ""
+        self._emit(f"Starting research on: {domain}{suffix}", "start")
 
         no_progress_rounds = 0
         run.stop_reason = "step limit reached"

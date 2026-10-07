@@ -1,5 +1,6 @@
 """Regulatory Opportunity Hunter: Streamlit UI."""
 
+import html
 import json
 import time
 
@@ -25,6 +26,8 @@ st.set_page_config(page_title="Regulatory Opportunity Hunter", page_icon="🔎",
 st.title("Regulatory Opportunity Hunter")
 st.caption("Searches Israeli laws, regulations and government guidance for lawful, regulation-created business opportunities.")
 st.warning(DISCLAIMER)
+# Let each text field and paragraph pick its own direction (Hebrew RTL, English LTR).
+st.markdown("<style>textarea, input[type=text] {unicode-bidi: plaintext;}</style>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ inputs
 missing = [k for k in (llm.api_key_env_name(), "SERPER_API_KEY") if not get_setting(k)]
@@ -35,6 +38,17 @@ if missing:
     )
 
 domain = st.text_input("What domain should we investigate?", placeholder="e.g. equipment rental, mandatory inspections, waste and recycling")
+instructions = st.text_area(
+    "Custom Research Instructions",
+    height=150,
+    max_chars=agent.MAX_INSTRUCTIONS_CHARS,
+    placeholder=(
+        "Optional, Hebrew or English. Describe goals, business constraints, priorities, exclusions or questions. "
+        "e.g. Prioritize opportunities needing under ₪30,000 startup capital that can run alongside a full-time job."
+    ),
+    help="Guides the agent's focus. It cannot override the built-in legal safeguards, source verification, "
+    "red-team process or run limits.",
+)
 
 with st.expander("Advanced settings"):
     c1, c2, c3, c4 = st.columns(4)
@@ -47,7 +61,7 @@ start = st.button("Start Research", type="primary", disabled=bool(missing) or no
 
 
 # ---------------------------------------------------------------- research
-def run_research(domain: str, limits: agent.Limits) -> agent.RunResult:
+def run_research(domain: str, instructions: str, limits: agent.Limits) -> agent.RunResult:
     status = st.status("Researching…", expanded=True)
     with status:
         phase_box = st.empty()
@@ -74,7 +88,7 @@ def run_research(domain: str, limits: agent.Limits) -> agent.RunResult:
         status.update(label="Configuration error", state="error")
         return agent.RunResult(domain=domain, error=str(exc))
 
-    run = agent.ResearchAgent(client, limits=limits, on_event=on_event).run(domain)
+    run = agent.ResearchAgent(client, limits=limits, on_event=on_event).run(domain, instructions)
     run.trace["llm_warnings"] = list(client.warnings)
     status.update(label="Research complete" if not run.error else "Research ended with an error",
                   state="complete" if not run.error else "error", expanded=False)
@@ -83,7 +97,7 @@ def run_research(domain: str, limits: agent.Limits) -> agent.RunResult:
 
 if start:
     limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps))
-    st.session_state["run"] = run_research(domain.strip(), limits)
+    st.session_state["run"] = run_research(domain.strip(), instructions.strip(), limits)
     st.session_state["run_at"] = time.strftime("%Y-%m-%d %H:%M")
 
 
@@ -151,6 +165,14 @@ def show_trace(trace: dict) -> None:
             f"Stop reason: {trace.get('stop_reason', 'n/a')} · Model calls: {len(trace.get('model_calls', []))} · "
             f"Elapsed: {trace.get('elapsed_s', 0)}s"
         )
+        st.markdown("**Custom research instructions**")
+        if trace.get("custom_instructions"):
+            st.markdown(
+                f'<div dir="auto" style="white-space: pre-wrap">{html.escape(trace["custom_instructions"])}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown("_None provided._")
         for w in trace.get("warnings", []) + trace.get("llm_warnings", []):
             st.markdown(f"- ⚠️ {w}")
         st.markdown(f"**Searches ({len(trace.get('searches', []))})**")
