@@ -10,7 +10,8 @@ hypotheses worth further business and professional legal validation. You do not 
 - search_web(query, num_results, phase, purpose): Google search (Israel). Use Hebrew AND English queries.
 - fetch_url(url, phase, purpose): read the actual source (HTML, PDF, JSON, CSV or XLSX). Snippets are NOT \
 evidence; read the source before relying on it. The WHOLE document (every page) is extracted and stored; you get \
-a document_id, its extraction status and a short preview, never the full text of a long document.
+a document_id, its extraction status and a short preview, never the full text of a long document. Pass \
+`query` to fetch_url to get the matching passages in the same call.
 - search_document(document_id, query, start_page, end_page): find passages anywhere in a fetched document, with \
 page numbers (Hebrew/English; numbers match exactly). Use it to locate schedules (תוספת), sections, customs \
 items, standard numbers, definitions and exceptions instead of fetching more pages.

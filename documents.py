@@ -13,8 +13,9 @@ was detected; otherwise it is "partial" and the problems are listed, so a missin
 mistaken for an absent provision.
 
 Hebrew PDFs: pypdf drops right-to-left text when a line switches direction (e.g. Hebrew next to a section
-or tariff number), so pages containing Hebrew are re-extracted character by character with pdfplumber and
-converted from visual to logical order. Tables are rendered on demand (read_document_range tables=true).
+or tariff number), so pages containing Hebrew are rebuilt character by character from their positions
+(PDFium via pypdfium2; pdfplumber as a fallback) and converted from visual to logical order. Pages without
+right-to-left text keep pypdf's extraction. Tables are rendered on demand (read_document_range tables=true).
 """
 
 from __future__ import annotations
@@ -33,7 +34,12 @@ from pathlib import Path
 from config import get_int, get_setting
 from evidence import STOPWORDS, _english_match, _hebrew_match, excerpt_found, normalize_text, strip_controls
 
-try:  # character-level extraction for Hebrew / right-to-left pages and tables
+try:  # fast character positions for Hebrew / right-to-left pages (installed with pdfplumber)
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_raw
+except ImportError:  # pragma: no cover - listed in requirements.txt
+    pdfium = pdfium_raw = None
+try:  # fallback character-level extraction, and tables
     import pdfplumber
 except ImportError:  # pragma: no cover - listed in requirements.txt
     pdfplumber = None
@@ -75,6 +81,32 @@ def visual_to_logical(line: str) -> str:
     """Visual-order (left-to-right glyph order) right-to-left line -> logical reading order.
     The line is reversed, then left-to-right runs (numbers, Latin words, codes) are restored."""
     return LTR_RUN_RE.sub(lambda m: m.group(0)[::-1], line[::-1])
+
+
+_OPEN, _CLOSE = "([{", ")]}"
+_SWAP = str.maketrans("()[]{}", ")(][}{")
+
+
+def _bracket_depth_ok(line: str) -> bool:
+    depth = 0
+    for ch in line:
+        if ch in _OPEN:
+            depth += 1
+        elif ch in _CLOSE:
+            depth -= 1
+            if depth < 0:
+                return False
+    return True
+
+
+def fix_mirrored_brackets(line: str) -> str:
+    """Some extractors mirror brackets in right-to-left runs ("(סעיף 2(א))" -> ")סעיף 2)א(("). Swap them back
+    when that makes the line well-formed."""
+    if not _bracket_depth_ok(line):
+        swapped = line.translate(_SWAP)
+        if _bracket_depth_ok(swapped):
+            return swapped
+    return line
 
 
 def reversed_hebrew_score(text: str) -> tuple[int, int]:
@@ -141,21 +173,56 @@ def _ranges(numbers: list[int]) -> str:
     return ", ".join(out)
 
 
+def _line_text(chars: list[tuple[float, float, float, str]]) -> str:
+    """chars: (x0, x1, size, text) on one line -> logical-order text (gap-based spaces, visual->logical for RTL)."""
+    chars = sorted(chars, key=lambda c: c[0])
+    text, prev = "", None
+    for x0, x1, size, ch in chars:
+        if prev is not None and x0 - prev[1] > (size or 10) * 0.15 and not text.endswith(" ") and ch != " ":
+            text += " "
+        text += ch
+        prev = (x0, x1)
+    text = re.sub(r" {2,}", " ", text).strip()
+    return fix_mirrored_brackets(visual_to_logical(text)) if is_rtl_line(text) else text
+
+
+def _pdfium_text(page) -> str:
+    """Line reconstruction from PDFium character boxes (fast; C library)."""
+    tp = page.get_textpage()
+    try:
+        n = tp.count_chars()
+        full = tp.get_text_range(0, n) if n else ""
+        if len(full) != n:
+            full = "".join(tp.get_text_range(i, 1) for i in range(n))
+        chars = []
+        for i, ch in enumerate(full):
+            if ch in "\r\n\x00" or pdfium_raw.FPDFText_IsGenerated(tp.raw, i) == 1:
+                continue
+            x0, bottom, x1, top = tp.get_charbox(i, loose=True)
+            chars.append(((bottom + top) / 2, top - bottom, x0, x1, ch))
+    finally:
+        tp.close()
+    lines: list[list] = []
+    for c in sorted(chars, key=lambda c: -c[0]):
+        if lines and abs(lines[-1][0] - c[0]) <= max(1.0, c[1] * 0.3):
+            lines[-1][1].append((c[2], c[3], c[1], c[4]))
+        else:
+            lines.append([c[0], [(c[2], c[3], c[1], c[4])]])
+    return "\n".join(t for t in (_line_text(cs) for _, cs in lines) if t)
+
+
+def _pdfium_probe(page) -> str:
+    tp = page.get_textpage()
+    try:
+        return tp.get_text_range()
+    finally:
+        tp.close()
+
+
 def _plumber_text(page) -> str:
-    """Character-level line reconstruction; right-to-left lines converted from visual to logical order."""
-    lines = []
-    for line in page.extract_text_lines(return_chars=True, strip=True):
-        chars = sorted(line["chars"], key=lambda c: c["x0"])
-        text, prev = "", None
-        for c in chars:
-            gap = c["x0"] - prev["x1"] if prev is not None else 0
-            if prev is not None and gap > (c.get("size") or 10) * 0.15 and not text.endswith(" ") and c["text"] != " ":
-                text += " "
-            text += c["text"]
-            prev = c
-        text = re.sub(r" {2,}", " ", text).strip()
-        lines.append(visual_to_logical(text) if is_rtl_line(text) else text)
-    return "\n".join(lines)
+    """Fallback character-level line reconstruction with pdfplumber (pdfminer)."""
+    return "\n".join(_line_text([(c["x0"], c["x1"], c.get("size") or 10, c["text"]) for c in line["chars"]])
+                     for line in page.extract_text_lines(return_chars=True, strip=True))
 
 
 def extract_pdf(data: bytes, max_pages: int | None = None) -> Extracted:
@@ -191,30 +258,50 @@ def extract_pdf(data: bytes, max_pages: int | None = None) -> Extracted:
     if total > max_pages:
         doc.problem(f"Only the first {max_pages} of {total} pages were extracted (DOCUMENT_MAX_PAGES).")
     plumber, errors, rtl_fallback, corrected, reversed_pages, garbled = None, [], [], [], [], []
+    fast = None
+    if pdfium is not None:
+        try:
+            fast = pdfium.PdfDocument(data)
+        except Exception:  # noqa: BLE001 - fall back to pypdf / pdfplumber
+            fast = None
     try:
         for i in range(n):
+            text, method = "", "failed"
+            probe = None
+            if fast is not None:
+                try:
+                    probe = _pdfium_probe(fast[i])
+                except Exception:  # noqa: BLE001
+                    probe = None
             frags: list[str] = []
-            try:
-                plain = reader.pages[i].extract_text(visitor_text=lambda t, *a: frags.append(t)) or ""
-            except Exception:  # noqa: BLE001
-                plain = None
-            rtl = any(RTL_RE.search(f) for f in frags if f) or bool(plain and RTL_RE.search(plain))
-            text, method = plain or "", "pypdf"
-            if plain is None or rtl:
-                if pdfplumber is None:
-                    if plain is None:
-                        errors.append(i + 1)
+            plain = None
+            if probe is None or not RTL_RE.search(probe):
+                try:
+                    plain = reader.pages[i].extract_text(visitor_text=lambda t, *a: frags.append(t)) or ""
+                except Exception:  # noqa: BLE001
+                    plain = None
+            rtl = bool(probe and RTL_RE.search(probe)) or any(RTL_RE.search(f) for f in frags if f) or bool(
+                plain and RTL_RE.search(plain))
+            if plain is not None and not rtl:
+                text, method = plain, "pypdf"
+            else:
+                if fast is not None:
+                    try:
+                        text, method = _pdfium_text(fast[i]), "pdfium"
+                    except Exception:  # noqa: BLE001
                         method = "failed"
-                    else:
-                        rtl_fallback.append(i + 1)
-                else:
+                if method == "failed" and pdfplumber is not None:
                     try:
                         plumber = plumber or pdfplumber.open(io.BytesIO(data))
                         text, method = _plumber_text(plumber.pages[i]), "pdfplumber"
                     except Exception:  # noqa: BLE001
-                        if plain is None:
-                            errors.append(i + 1)
-                            method = "failed"
+                        method = "failed"
+                if method == "failed" and plain is not None:
+                    text, method = plain, "pypdf"
+                    if rtl:
+                        rtl_fallback.append(i + 1)
+                if method == "failed":
+                    errors.append(i + 1)
             text = strip_controls(text).strip()
             if RTL_RE.search(text):
                 text, fixed = fix_hebrew_order(text)
@@ -231,6 +318,8 @@ def extract_pdf(data: bytes, max_pages: int | None = None) -> Extracted:
     finally:
         if plumber is not None:
             plumber.close()
+        if fast is not None:
+            fast.close()
 
     empty = [i + 1 for i, t in enumerate(doc.pages) if len(re.sub(r"\s", "", t)) < EMPTY_PAGE_CHARS]
     if len(empty) == len(doc.pages):
@@ -243,7 +332,7 @@ def extract_pdf(data: bytes, max_pages: int | None = None) -> Extracted:
         doc.problem(f"No extractable text on pages {_ranges(empty)} (possibly scanned images or graphics; "
                     "OCR is not supported). Content on those pages was NOT searched.", partial=not benign)
     if rtl_fallback:
-        doc.problem(f"Pages {_ranges(rtl_fallback)} contain Hebrew but pdfplumber is unavailable; text order and "
+        doc.problem(f"Pages {_ranges(rtl_fallback)} contain Hebrew but could only be read with pypdf; text order and "
                     "completeness are unreliable.")
     if corrected:
         doc.problem(f"Hebrew text order was reversed and has been corrected on pages {_ranges(corrected)}.",
@@ -601,7 +690,7 @@ class DocumentStore:
                     rtl = sum(is_rtl_line(c or "") for r in table for c in r) > len(table) * len(table[0] or [1]) / 4
                     for r in table:
                         cells = [re.sub(r"\s+", " ", strip_controls(c or "")).strip() for c in r]
-                        cells = [visual_to_logical(c) if is_rtl_line(c) else c for c in cells]
+                        cells = [fix_mirrored_brackets(visual_to_logical(c)) if is_rtl_line(c) else c for c in cells]
                         if rtl:
                             cells = cells[::-1]  # right-to-left table: first column is on the right
                         rows.append(" | ".join(cells))

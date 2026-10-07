@@ -104,11 +104,15 @@ TOOLS = [
         "function": {
             "name": "fetch_url",
             "description": "Download a web page or PDF (respects robots.txt and access restrictions). ALL pages are "
-                           "extracted and stored; returns a document_id, extraction status and a short preview. Use "
+                           "extracted and stored; returns a document_id, extraction status and a short preview. Pass "
+                           "`query` to also get the matching passages (with page numbers) in the same call. Use "
                            "search_document and read_document_range to find and read the rest.",
             "parameters": {
                 "type": "object",
-                "properties": {"url": {"type": "string"}, **_PHASE_PARAMS},
+                "properties": {"url": {"type": "string"},
+                               "query": {"type": "string", "description": "Optional: what to look for in the "
+                                                                          "document (e.g. 'תוספת שנייה 7318')."},
+                               **_PHASE_PARAMS},
                 "required": ["url"],
             },
         },
@@ -935,6 +939,22 @@ class ResearchAgent:
         if meta["status"] != "complete":
             result["warning"] = ("Extraction INCOMPLETE (see document.issues): content may be missing; do not treat a "
                                  "provision you cannot find as absent.")
+        query = str(args.get("query") or "").strip()
+        if query and self.document_query_count < self.limits.max_document_queries:
+            self.document_query_count += 1
+            try:
+                found = self.docs.search(doc_id, query, max_results=5)
+            except documents.DocumentError as exc:
+                result["matches"] = {"error": str(exc)}
+            else:
+                for hit in found["results"]:
+                    self.seen_passages[f"{doc_id}:{hit['page']}:{hit['first_line']}"] = self._current_eid
+                result["matches"] = {k: found[k] for k in ("query", "total_matching_passages", "pages_with_matches",
+                                                           "results", "note", "more") if k in found}
+                self.trace["document_queries"].append({"tool": "fetch_url(query)", "document_id": doc_id,
+                                                       "args": {"query": query},
+                                                       "hits": found["total_matching_passages"],
+                                                       "pages": found["pages_with_matches"][:20]})
         if cached is not None:
             result["served_from_cache"] = meta["fetched_at"]
         if getattr(res, "resource_url", ""):

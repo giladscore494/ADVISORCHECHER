@@ -54,7 +54,7 @@ def test_hebrew_pdf_text_in_logical_order_with_numbers_and_standards():
              "פרט 7318.15 - ברגים (סעיף 2(א)) ו-ISO 4032", "English line 12345"]
     doc = documents.extract_pdf(make_text_pdf(["\n".join(lines)]))
     assert doc.pages[0].split("\n") == lines
-    assert doc.methods == ["pdfplumber"]  # pypdf alone drops Hebrew next to numbers
+    assert doc.methods == ["pdfium"]  # pypdf alone drops Hebrew next to numbers
 
 
 def test_pypdf_alone_loses_hebrew_which_is_why_pdfplumber_is_used():
@@ -338,3 +338,14 @@ def test_document_missing_after_resume_is_redownloaded_for_verification(tmp_path
     src = run.result.opportunities[0].primary_sources[0]
     assert src.excerpt_verified and src.matched_pages == [120] and len(fetch.calls) == 2
     assert any("re-downloaded" in w for w in run.trace["warnings"])
+
+
+def test_fetch_with_query_returns_matching_passages_in_the_same_call(order_pdf):
+    a, run, llm = run_agent([
+        tool_response(("fetch_url", {"url": ORDER_URL, "query": "תוספת שנייה 7318"})),
+        text_response("DONE"), text_response("{}"),
+    ], pdf_fetch(order_pdf))
+    out = tool_outputs(llm, 1)[0]
+    assert out["matches"]["pages_with_matches"] == [SCHEDULE_PAGE]
+    assert SCHEDULE_QUOTE in out["matches"]["results"][0]["text"]
+    assert a.document_query_count == 1 and run.trace["document_queries"][0]["tool"] == "fetch_url(query)"
