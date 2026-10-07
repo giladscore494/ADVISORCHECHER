@@ -56,7 +56,7 @@ def test_check_digit_and_numeric_classification_fields(gov):
 def test_hebrew_prefixes_and_english_terms(gov):
     r = gov.search("all", "והרכב החשמלי")  # prefixed forms of רכב / חשמלי
     assert ("customs_tariff", "3") in {(d, i) for d, i, _ in ids(r)}
-    assert r["records"][0]["match"] == "all_terms"
+    assert r["records"][0]["match"].startswith("all_terms")
     r = gov.search("all", "toys")
     found = {(d, i) for d, i, _ in ids(r)}
     assert ("mandatory_standards", "1") in found and ("customs_tariff", "4") in found

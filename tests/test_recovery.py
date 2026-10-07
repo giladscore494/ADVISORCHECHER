@@ -270,3 +270,54 @@ def test_process_killed_during_final_json_generation(tmp_path):
     run = research_runner.resume(store, run_id, background=False, llm_factory=lambda p: llm,
                                  agent_kwargs={"search_fn": fake_search, "fetch_fn": fake_fetch})
     assert run.status == "completed" and llm.calls[0]["json_mode"] is True and len(llm.calls) == 1
+
+
+def test_interrupted_run_with_compaction_documents_and_checklist_resumes(store, tmp_path, monkeypatch):
+    """Interrupt after context compaction; resume in a process whose document cache is empty."""
+    import documents
+    from helpers import legal_checks
+
+    monkeypatch.setenv("CRITICAL_EVIDENCE_CHECKLIST", json.dumps([{"id": "legal_text", "question": "Legal text?"}]))
+    research = [tool_response(("search_web", {"query": f"תקנות {i}", "phase": "searching"}),
+                              ("fetch_url", {"url": f"{URL}-{i}", "phase": "reading"})) for i in range(6)]
+    research.append(tool_response(("record_findings", {"findings": [
+        {"statement": "Yearly inspection", "source_url": f"{URL}-0", "excerpt": EXCERPT,
+         "claim_type": "legal_conclusion"}]})))
+
+    class Interrupting(FakeLLM):
+        def chat(self, messages, tools=None, json_mode=False):
+            if len(self.calls) == 7:
+                raise KeyboardInterrupt
+            return super().chat(messages, tools, json_mode)
+
+    llm = Interrupting(research)
+    with pytest.raises(KeyboardInterrupt):
+        research_runner.start(store, "x", "", agent.Limits(context_budget_tokens=2500), "kimi", background=False,
+                              llm_factory=lambda p: llm,
+                              agent_kwargs={"search_fn": fake_search, "fetch_fn": fake_fetch})
+    rec = store.load(store.list_runs()[0]["run_id"])
+    state = rec["state"]
+    assert rec["status"] == "interrupted" and state["compactions"] >= 1
+    assert state["findings"][0]["source_status"] == "verified" and len(state["url_docs"]) == 6
+    (doc,) = state["documents"].values()  # identical content -> one content-addressed document, six URLs
+    assert len(doc["urls"]) == 6
+    assert state["checklist"][0]["status"] == "open" and len(state["ledger"]) == 13
+    compacted_before = [m["content"] for m in state["messages"] if m.get("_compacted")]
+
+    # Another machine: empty document cache. The run resumes from the checkpoint and re-downloads what it needs.
+    monkeypatch.setenv("DOCUMENT_CACHE_DIR", str(tmp_path / "other-machine"))
+    documents.reset_default()
+    report = valid_report(f"{URL}-0")
+    report["opportunities"][0]["legal_checks"] = legal_checks(f"{URL}-0")
+    resumed = FakeLLM([text_response("DONE"), text_response("DONE"), text_response(json.dumps(report))])
+    run = research_runner.resume(store, rec["run_id"], background=False, llm_factory=lambda p: resumed,
+                                 agent_kwargs={"search_fn": fake_search, "fetch_fn": fake_fetch})
+    assert run.status == "completed"
+    first = resumed.calls[0]["messages"]
+    assert [m["content"] for m in first if m.get("_compacted")][:len(compacted_before)] == compacted_before
+    assert first[-1]["content"].startswith("RESEARCH DIGEST") and EXCERPT in first[-1]["content"]
+    opp = run.result.opportunities[0]
+    assert opp.verification_status == "verified" and opp.legal_verification == "verified"
+    assert any("re-downloaded" in w for w in run.trace["warnings"])
+    assert run.result.checklist[0]["status"] == "unresolved"  # completion review ran once, then closed
+    assert len(run.trace["completion_reviews"]) == 1

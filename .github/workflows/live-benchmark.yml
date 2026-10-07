@@ -1,0 +1,41 @@
+name: Live HS 7318 benchmark
+
+# Real model + Serper + official sites: costs API tokens, so it never runs automatically. Run it from the
+# Actions tab (workflow_dispatch) or by adding the `live-benchmark` label to a pull request.
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Model provider (openai | kimi | glm)"
+        default: openai
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'live-benchmark'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      GOVDATA_WARMUP: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/live_hs7318.py --provider "${{ github.event.inputs.provider || 'openai' }}" --out live_hs7318_metrics.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-hs7318-metrics
+          path: live_hs7318_metrics.json
+          if-no-files-found: ignore

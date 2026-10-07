@@ -3,18 +3,22 @@
 Used when a run fails, times out, is interrupted, or the model's final JSON report cannot be produced or
 validated. Every item is labelled: VERIFIED (official source retrieved in this run and the quoted excerpt
 was found in it), RETRIEVED (content retrieved, no verified claim), UNVERIFIED / FAILED, or WORKING
-HYPOTHESIS (the model's candidate funnel, never verified by itself).
+HYPOTHESIS (the model's candidate funnel, never verified by itself). Source verification, legal applicability
+and business advantage are reported separately: a verified quote is not a verified legal conclusion.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import verification
+
 NOTICE = (
     "PARTIAL REPORT - this is NOT a validated final report. It was generated automatically from the research "
     "evidence that was saved before the run stopped. It contains no new conclusions: candidates are the model's "
     "working hypotheses, and only items marked VERIFIED were confirmed against an official source retrieved "
-    "during this run. Dataset records are factual dataset evidence, not legally binding text. Nothing here is "
+    "during this run. SOURCE VERIFIED only means a quote was found in a retrieved source: it is not a verified "
+    "legal conclusion. Dataset records are factual dataset evidence, not legally binding text. Nothing here is "
     "legal advice; verify everything with a qualified professional."
 )
 
@@ -56,8 +60,17 @@ def build(state: dict, status: str = "failed", error: str = "", checkpoint_at: s
             "elapsed_s": state.get("elapsed_s", 0),
         },
         "token_usage": trace.get("token_usage", {}),
+        "token_usage_by_phase": trace.get("token_usage_by_phase", {}),
+        "verification_counters": verification.counters(findings),
+        # Source dimension (key names kept for compatibility).
         "verified_findings": [f for f in findings if f.get("verified")],
         "unverified_findings": [f for f in findings if not f.get("verified")],
+        "legal_conclusions": [f for f in findings if f.get("claim_type") == "legal_conclusion"],
+        "business_claims": [f for f in findings if f.get("claim_type") == "business_advantage"],
+        "unresolved_negative_claims": [f for f in findings if f.get("negative_claim")
+                                       and f.get("legal_status") != verification.VERIFIED],
+        "checklist": state.get("checklist") or [],
+        "documents": list((state.get("documents") or {}).values()),
         "candidates": [
             {"name": n, "status": c.get("status", ""), "mechanism": c.get("mechanism", ""),
              "reason": c.get("reason", ""), "label": "WORKING HYPOTHESIS - not verified"}
@@ -123,10 +136,34 @@ def to_markdown(report: dict) -> str:
         lines.extend(["", f"## {title}", ""])
         lines.extend(render(i) for i in items) if items else lines.append("_None recorded._")
 
-    section("VERIFIED findings (official source retrieved; excerpt found)", report["verified_findings"],
-            lambda f: f"- {_esc(f['statement'])}  \n  Source: {f['source_url']}  \n  > {_esc(f['excerpt'])}")
-    section("UNVERIFIED findings", report["unverified_findings"],
+    c = report.get("verification_counters") or {}
+    if c:
+        lines += ["", f"**Verification (separate dimensions):** sources verified {c.get('source_verified', 0)}/"
+                      f"{c.get('findings', 0)} · legal conclusions verified {c.get('legal_verified', 0)}/"
+                      f"{c.get('legal_conclusions', 0)} · business advantages verified {c.get('business_verified', 0)}/"
+                      f"{c.get('business_claims', 0)} · unresolved negative claims {c.get('negative_unresolved', 0)}"]
+    section("SOURCE-VERIFIED findings (official source retrieved; excerpt found; NOT by itself a legal conclusion)",
+            report["verified_findings"],
+            lambda f: f"- {_esc(f['statement'])}  \n  Source: {f['source_url']}"
+                      + (f" (pages {f['matched_pages']})" if f.get("matched_pages") else "")
+                      + f"  \n  > {_esc(f['excerpt'])}")
+    section("Source-UNVERIFIED findings", report["unverified_findings"],
             lambda f: f"- {_esc(f['statement'])}  \n  Source: {f['source_url']} - _{_esc(f.get('verification_note'))}_")
+    section("Legal conclusions (legal applicability)", report.get("legal_conclusions", []),
+            lambda f: f"- [{verification.LABELS.get(f.get('legal_status'), 'UNVERIFIED')}] {_esc(f['statement'])}"
+                      + "".join(f"  \n  - {_esc(n)}" for n in f.get("legal_notes", [])))
+    section("Business advantage claims", report.get("business_claims", []),
+            lambda f: f"- [{verification.LABELS.get(f.get('business_status'), 'UNVERIFIED')}] {_esc(f['statement'])}"
+                      + "".join(f"  \n  - {_esc(n)}" for n in f.get("business_notes", [])))
+    section("UNRESOLVED exemption / no-requirement claims (not established)", report.get("unresolved_negative_claims", []),
+            lambda f: f"- {_esc(f['statement'])}")
+    section("Critical-evidence checklist", report.get("checklist", []),
+            lambda i: f"- **{i['status'].upper()}** {_esc(i['question'])}" + (f" - {_esc(i['note'])}" if i.get("note") else "")
+                      + (f" (evidence {', '.join(i['evidence'])})" if i.get("evidence") else ""))
+    section("Documents stored (complete text, page-indexed)", report.get("documents", []),
+            lambda d: f"- `{d['document_id']}` {_esc(d.get('title')) or d.get('url')} - {d.get('page_count')} "
+                      f"{d.get('unit', 'page')}s, extraction {d.get('status')} ({d.get('final_url') or d.get('url')})"
+                      + "".join(f"  \n  - {_esc(i)}" for i in d.get("issues", [])))
     section("Candidate opportunities (WORKING HYPOTHESES - not verified)", report["candidates"],
             lambda c: f"- **{_esc(c['name'])}** [{c['status']}] {_esc(c['mechanism'])}"
                       + (f" - {_esc(c['reason'])}" if c.get("reason") else ""))

@@ -9,23 +9,26 @@ import socket
 import time
 import zipfile
 from dataclasses import asdict, dataclass, field
+from typing import Any
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
 from bs4 import BeautifulSoup
 
+import documents
+from config import get_int
 from evidence import strip_controls
-from pypdf import PdfReader
 
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0 Safari/537.36 RegulatoryOpportunityHunter/0.1"
 )
 TIMEOUT = (10, 30)  # connect, read
-MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024
+# Legal PDFs (laws with all their schedules) can be large; a download over the cap fails loudly, never silently.
+MAX_DOWNLOAD_BYTES = get_int("DOCUMENT_MAX_BYTES", 40 * 1024 * 1024)
+# Kept for callers that ask for a bounded text; fetch_url itself no longer truncates (max_chars=None).
 MAX_TEXT_CHARS = 15000
-MAX_PDF_PAGES = 60
 MAX_REDIRECTS = 5
 MAX_TABLE_ROWS = 200  # rows rendered per CSV file / XLSX sheet
 MAX_XLSX_SHEETS = 5
@@ -68,9 +71,12 @@ class FetchResult:
     attempts: int = 1
     # True for 401/403 or robots.txt disallow: access is restricted and must not be bypassed.
     access_restricted: bool = False
+    # Page-by-page extraction (documents.Extracted) and the downloaded bytes, for the document store.
+    document: Any = None
+    raw: bytes = b""
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {k: v for k, v in asdict(self).items() if k not in ("document", "raw")}
 
 
 def _is_public_host(host: str) -> bool:
@@ -115,22 +121,13 @@ def extract_html_text(html: str | bytes) -> tuple[str, str]:
 
 
 def extract_pdf_text(data: bytes) -> tuple[str, str]:
-    """Return (title, text) from PDF bytes. Raises ValueError if no text can be extracted."""
-    try:
-        reader = PdfReader(io.BytesIO(data))
-        pages = []
-        for i, page in enumerate(reader.pages[:MAX_PDF_PAGES], start=1):
-            page_text = (page.extract_text() or "").strip()
-            if page_text:
-                pages.append(f"[page {i}]\n{page_text}")
-        title = ""
-        if reader.metadata and reader.metadata.title:
-            title = str(reader.metadata.title)
-    except Exception as exc:
-        raise ValueError(f"PDF could not be parsed: {exc}") from exc
-    if not pages:
-        raise ValueError("PDF contains no extractable text (possibly scanned; OCR is not supported).")
-    return title, "\n\n".join(pages)
+    """Return (title, text) with every page of a PDF ("[page n]" markers). Raises ValueError if no text."""
+    doc = documents.extract_pdf(data)
+    return doc.title, pages_text(doc)
+
+
+def pages_text(doc) -> str:
+    return "\n\n".join(f"[{doc.unit} {i}]\n{t}" for i, t in enumerate(doc.pages, start=1) if t)
 
 
 def _cell(value) -> str:
@@ -389,11 +386,12 @@ def robots_allowed(url: str, session: requests.Session) -> bool:
 
 def fetch_url(
     url: str,
-    max_chars: int = MAX_TEXT_CHARS,
+    max_chars: int | None = None,
     session: requests.Session | None = None,
     respect_robots: bool = True,
 ) -> FetchResult:
-    """Fetch a URL and return its readable text. Never raises: failures are reported in the result."""
+    """Fetch a URL and return its readable text, page by page (`document`), without truncation unless the
+    caller asks for `max_chars`. Never raises: failures are reported in the result."""
     session = session or requests.Session()
     try:
         if respect_robots and _check_url(url) is None and not robots_allowed(url, session):
@@ -421,9 +419,11 @@ def fetch_url(
     is_pdf, is_json, is_xlsx, is_csv = (kind == k for k in ("pdf", "json", "xlsx", "csv"))
     resource_url, metadata = "", {}
     source_type = kind
+    document = None
     try:
         if is_pdf:
-            title, text = extract_pdf_text(data)
+            document = documents.extract_pdf(data)
+            title, text = document.title, pages_text(document)
         elif is_json:
             source_type, title, text, resource_url, metadata = extract_json(data)
             if resource_url:
@@ -459,9 +459,17 @@ def fetch_url(
             url=url, final_url=final_url, ok=False, source_type=source_type,
             http_status=resp.status_code, error="No readable text extracted (page may require JavaScript).",
         )
-    text, truncated = _truncate(strip_controls(text), max_chars)
+    text = strip_controls(text)
+    if document is None:
+        document = documents.extract_sections(text, source_type, title)
+        if re.search(r"\[showing first \d+ of \d+ data rows\]", text):
+            document.problem("Only the first rows of this table were rendered; use the dataset tools for all records.")
+    truncated = False
+    if max_chars is not None:
+        text, truncated = _truncate(text, max_chars)
     return FetchResult(
         url=url, final_url=final_url, ok=True, source_type=source_type, title=strip_controls(title),
         text=text, http_status=resp.status_code, truncated=truncated,
         resource_url=resource_url, metadata=metadata, attempts=attempts,
+        document=document, raw=data if is_pdf else b"",
     )

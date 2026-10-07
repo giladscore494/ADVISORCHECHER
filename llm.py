@@ -57,7 +57,7 @@ PROVIDERS: dict[str, dict[str, str]] = {
 }
 PROVIDER_LABELS = {"kimi": "Kimi (Moonshot)", "glm": "GLM (Z.ai)", "openai": "OpenAI"}
 # Keys in history messages that are internal to this app and never sent to Chat Completions endpoints.
-INTERNAL_MESSAGE_KEYS = ("_responses_output",)
+INTERNAL_MESSAGE_KEYS = ("_responses_output", "_evidence_id", "_compacted", "_from_ledger")
 
 
 class LLMError(Exception):
@@ -185,6 +185,13 @@ class LLMClient:
                 "prompt_tokens": completion.usage.prompt_tokens or 0,
                 "completion_tokens": completion.usage.completion_tokens or 0,
             }
+            cached = getattr(getattr(completion.usage, "prompt_tokens_details", None), "cached_tokens", None)
+            if cached:
+                usage["cached_tokens"] = cached
+            reasoning_tokens = getattr(getattr(completion.usage, "completion_tokens_details", None),
+                                       "reasoning_tokens", None)
+            if reasoning_tokens:
+                usage["reasoning_tokens"] = reasoning_tokens
         return ChatResponse(
             content=msg.content or "",
             tool_calls=tool_calls,
@@ -319,6 +326,9 @@ def parse_responses_output(response, duration: float) -> ChatResponse:
         details = getattr(u, "output_tokens_details", None)
         if details is not None and getattr(details, "reasoning_tokens", None):
             usage["reasoning_tokens"] = details.reasoning_tokens
+        cached = getattr(getattr(u, "input_tokens_details", None), "cached_tokens", None)
+        if cached:
+            usage["cached_tokens"] = cached
     if tool_calls:
         finish = "tool_calls"
     elif status == "incomplete":
