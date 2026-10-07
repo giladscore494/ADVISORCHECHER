@@ -1,5 +1,7 @@
-streamlit
-pandas
-numpy
-google-generativeai
-json-repair
+streamlit>=1.40
+openai>=1.50
+requests>=2.31
+beautifulsoup4>=4.12
+pypdf>=4.0
+pydantic>=2.6
+python-dotenv>=1.0
