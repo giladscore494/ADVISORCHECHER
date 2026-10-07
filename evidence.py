@@ -6,6 +6,7 @@ that was retrieved during the run.
 """
 
 import re
+import sys
 import unicodedata
 
 HEBREW_FINALS = str.maketrans("ךםןףץ", "כמנפצ")
@@ -31,11 +32,33 @@ def strip_controls(text: str) -> str:
     return _CONTROL_RE.sub("", text or "")
 
 
+# Every combining character (niqqud, accents): removing them with one regex is equivalent to filtering
+# unicodedata.combining() per character, and much faster on large dataset snapshots.
+def _combining_class() -> str:
+    ranges: list[list[int]] = []
+    for c in range(sys.maxunicode + 1):
+        if unicodedata.combining(chr(c)):
+            if ranges and ranges[-1][1] == c - 1:
+                ranges[-1][1] = c
+            else:
+                ranges.append([c, c])
+    return "".join(re.escape(chr(a)) if a == b else f"{re.escape(chr(a))}-{re.escape(chr(b))}" for a, b in ranges)
+
+
+_COMBINING_RE = re.compile(f"[{_combining_class()}]")
+_COMBINING_SET = frozenset(c for c in map(chr, range(sys.maxunicode + 1)) if unicodedata.combining(c))
+_FINALS = (("ך", "כ"), ("ם", "מ"), ("ן", "נ"), ("ף", "פ"), ("ץ", "צ"))
+
+
 def normalize_text(text: str) -> str:
     """Lowercase, drop Hebrew niqqud, unify final letters, replace punctuation with spaces."""
     text = unicodedata.normalize("NFKD", strip_controls(str(text or "")))
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    text = text.lower().translate(HEBREW_FINALS)
+    if not _COMBINING_SET.isdisjoint(text):
+        text = _COMBINING_RE.sub("", text)
+    text = text.lower()
+    for final, regular in _FINALS:  # same as .translate(HEBREW_FINALS), faster on long texts
+        if final in text:
+            text = text.replace(final, regular)
     return " ".join(_TOKEN_RE.findall(text))
 
 

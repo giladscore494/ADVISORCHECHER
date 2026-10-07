@@ -58,15 +58,15 @@ DEFAULT_USER_AGENT = (
 # Verified data.gov.il resource ids (see README "Government dataset snapshots").
 RESOURCES: list[dict[str, str]] = [
     {"key": "customs_tariff", "resource_id": "5536eaa1-2e51-406b-aff6-b9ca02801b7c",
-     "label": "Customs tariff (תעריף המכס)"},
+     "label": "Customs tariff & purchase tax book (ספר סיווג טובין ביבוא - תעריף המכס ומס קניה)"},
     {"key": "free_import_order", "resource_id": "a36db570-09f2-4521-8e3d-0290eb839c68",
-     "label": "Free Import Order requirements (צו יבוא חופשי)"},
+     "label": "Legal requirements - Free Import Order (דרישות חוקיות - צו יבוא חופשי)"},
     {"key": "mandatory_standards", "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
-     "label": "Mandatory standards (תקנים רשמיים)"},
+     "label": "Official standards registry (מאגר תקנים רשמיים)"},
     {"key": "import_regulations", "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
-     "label": "Additional import regulations"},
+     "label": "Legal requirements - additional orders (דרישות חוקיות - צוים נוספים)"},
     {"key": "standards_declarations", "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
-     "label": "Official standards declarations (הכרזות תקנים רשמיים)"},
+     "label": "Official standards declarations in Reshumot (אכרזת תקנים ברשומות)"},
 ]
 
 PAGE_SIZE = 5000

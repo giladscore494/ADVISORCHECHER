@@ -1,24 +1,34 @@
 """Controlled tool-calling research loop.
 
-The model reasons, calls search_web / fetch_url / the data.gov.il dataset tools /
-update_candidates, and we execute those tools under hard limits (steps, searches,
-fetches, API calls, duplicates).
-When the model says it is done, or a limit is hit, we ask for the final JSON
-report, validate it, and retry once if it is malformed.
+The model reasons, calls search_web / fetch_url / the live data.gov.il dataset tools / the local
+government snapshot tools / update_candidates / record_findings, and we execute those tools under
+hard limits (steps, searches, fetches, API calls, local queries, duplicates).
+When the model says it is done, or a limit is hit, we ask for the final JSON report, validate it,
+and retry once if it is malformed.
+
+Durability: every model response, every completed tool call, every phase change, every caught error
+and every finalization attempt is checkpointed through `checkpointer` (see research_store.Checkpointer)
+together with the full resumable state (conversation, evidence, provenance, candidates, findings,
+counters, token usage). A run interrupted at any point can be resumed with `ResearchAgent.resume()`,
+and if no valid final report can be produced a clearly labelled partial report is built from the
+saved evidence (partial_report.py) instead of losing the run.
 """
 
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse, urlunparse
 
 import datagov
+import local_data
+import partial_report
 from evidence import excerpt_found, extract_terms
 from fetcher import fetch_url
 from llm import LLMError, parse_tool_arguments
-from models import ResearchResult, parse_research_result, rank_opportunities
+from models import ResearchResult, SourceRef, parse_research_result, rank_opportunities
 from prompts import (
     CUSTOM_INSTRUCTIONS_TEMPLATE,
     FINALIZE_PROMPT,
@@ -131,6 +141,92 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "list_local_government_datasets",
+            "description": "List the complete, validated official data.gov.il snapshots stored with this app (customs "
+                           "tariff, Free Import Order requirements, additional import orders, official standards, "
+                           "standards declarations): fields, row counts, snapshot date. Free; no network.",
+            "parameters": {"type": "object", "properties": {**_PHASE_PARAMS}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_local_government_records",
+            "description": "Focused query over a local official snapshot (indexed; never returns whole datasets). "
+                           "Supports exact customs classification codes (e.g. 8703.23.00.00/2, 87032300, 8703) with "
+                           "parent heading/chapter and child matches, Hebrew/English terms across all fields, and "
+                           "exact-match field filters. Returns matching records with exact field values, record ids "
+                           "and provenance. Zero matches is NOT proof of an exemption.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dataset": {"type": "string",
+                                "description": "Dataset key from list_local_government_datasets, or 'all'."},
+                    "query": {"type": "string", "description": "Customs code or Hebrew/English terms."},
+                    "filters": {"type": "object", "description": "Optional exact-match field filters, e.g. "
+                                                                 "{\"ConfirmationType\": \"...\"}."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": local_data.MAX_LIMIT,
+                              "default": local_data.DEFAULT_LIMIT},
+                    "offset": {"type": "integer", "minimum": 0, "default": 0},
+                    **_PHASE_PARAMS,
+                },
+                "required": ["dataset", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_local_government_record",
+            "description": "Get one record (all exact field values + provenance) from a local official snapshot.",
+            "parameters": {
+                "type": "object",
+                "properties": {"dataset": {"type": "string"}, "record_id": {"type": "string"}, **_PHASE_PARAMS},
+                "required": ["dataset", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_government_snapshot_status",
+            "description": "Snapshot date, last official verification and freshness of every local dataset. Use the "
+                           "live data.gov.il tools when freshness matters or a record is missing locally.",
+            "parameters": {"type": "object", "properties": {**_PHASE_PARAMS}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_findings",
+            "description": "Save findings as you establish them (they are checkpointed and survive failures) and "
+                           "open questions. Each finding needs the source URL (or dataset resource_id) it rests on and "
+                           "an exact excerpt from the retrieved content; the system checks the excerpt.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "statement": {"type": "string"},
+                                "source_url": {"type": "string"},
+                                "excerpt": {"type": "string"},
+                                "resource_id": {"type": "string"},
+                            },
+                            "required": ["statement", "source_url", "excerpt"],
+                        },
+                    },
+                    "open_questions": {"type": "array", "items": {"type": "string"}},
+                    **_PHASE_PARAMS,
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_candidates",
             "description": "Record or update candidate opportunities in the research funnel.",
             "parameters": {
@@ -185,6 +281,7 @@ class Limits:
     max_fetches: int = 20
     max_opportunities: int = 5
     max_api_calls: int = 40  # data.gov.il CKAN API calls per run
+    max_local_queries: int = 60  # local snapshot queries per run (cheap, but bounded)
 
 
 @dataclass
@@ -194,6 +291,37 @@ class RunResult:
     error: str = ""
     stop_reason: str = ""
     trace: dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
+    status: str = ""  # completed | failed | interrupted
+    partial_report: dict | None = None
+
+
+STATE_VERSION = 1
+MAX_STORED_EVENTS = 300
+MAX_LOCAL_RESULT_CHARS = 30000
+MAX_FINDINGS = 100
+MAX_OPEN_QUESTIONS = 50
+INTERRUPTED_TOOL_RESULT = ("This tool call was interrupted (server restart or failure) before it completed. "
+                           "Call it again if you still need it.")
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class NullCheckpointer:
+    """Used when no durable store is configured (tests, scripts)."""
+
+    failures = 0
+
+    def save(self, label, phase, state, summary, status="running", error=""):
+        return None
+
+    def touch(self, label=None, phase=None):
+        return None
+
+    def finish(self, status, error="", final_report=None, partial_report=None):
+        return None
 
 
 def normalize_query(q: str) -> str:
@@ -215,9 +343,15 @@ class ResearchAgent:
         search_fn: Callable[..., list[dict]] = search_web,
         fetch_fn: Callable[[str], Any] = fetch_url,
         ckan_client: "datagov.CkanClient | None" = None,
+        gov_data: "local_data.GovernmentData | None" = None,
+        checkpointer=None,
+        run_id: str = "",
     ):
         self.llm = llm
         self.limits = limits or Limits()
+        self.gov_data = gov_data
+        self.checkpointer = checkpointer or NullCheckpointer()
+        self.run_id = run_id
         self.ckan = ckan_client or datagov.CkanClient(max_calls=self.limits.max_api_calls)
         self.domain = ""
         # Retrieved content (normalized URL -> text) used to confirm quoted excerpts.
@@ -236,12 +370,25 @@ class ResearchAgent:
         self.url_titles: dict[str, str] = {}
         self.search_count = 0
         self.fetch_count = 0
+        self.local_query_count = 0
         self.phase = "mapping"
         self.started = time.monotonic()
+        self.elapsed_before = 0.0  # time spent before a resume
+        self.instructions = ""
+        self.messages: list[dict] = []
+        self.step = 0  # last completed step
+        self.no_progress_rounds = 0
+        self.loop_done = False
+        self.finalize_index: int | None = None
+        self.final_raw = ""
+        self.findings: list[dict] = []
+        self.open_questions: list[str] = []
         self.trace: dict[str, Any] = {
             "searches": [], "fetches": [], "model_calls": [], "tool_calls": [],
             "candidates": {}, "events": [], "warnings": [],
             "dataset_searches": [], "dataset_inspections": [], "dataset_reads": [], "api_calls": [],
+            "local_queries": [], "api_errors": [], "resumes": [],
+            "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "model_calls": 0},
         }
 
     # ---------------------------------------------------------------- events
@@ -254,14 +401,126 @@ class ResearchAgent:
             "fetches": self.fetch_count,
             "candidates": len(self.trace["candidates"]),
             "api_calls": self.ckan.calls,
-            "elapsed_s": round(time.monotonic() - self.started, 1),
+            "local_queries": self.local_query_count,
+            "elapsed_s": self._elapsed(),
+            "at": iso_now(),
         }
         self.trace["events"].append(event)
         self.on_event(event)
 
+    def _elapsed(self) -> float:
+        return round(self.elapsed_before + time.monotonic() - self.started, 1)
+
     def _set_phase(self, args: dict) -> None:
-        if args.get("phase") in PHASES:
+        if args.get("phase") in PHASES and args["phase"] != self.phase:
+            previous = self.phase
             self.phase = args["phase"]
+            self._checkpoint(f"phase: {PHASES[previous]} -> {PHASES[self.phase]}")
+
+    def _api_error(self, source: str, error: str) -> None:
+        self.trace["api_errors"].append({"at": iso_now(), "source": source, "error": str(error)[:1000]})
+
+    # ------------------------------------------------------------ durability
+    def export_state(self) -> dict:
+        """Everything needed to resume this run or to build a partial report (JSON-serializable)."""
+        trace = dict(self.trace)
+        trace["events"] = trace["events"][-MAX_STORED_EVENTS:]
+        trace["api_calls"] = list(self.ckan.log)
+        trace["elapsed_s"] = self._elapsed()
+        return {
+            "state_version": STATE_VERSION,
+            "run_id": self.run_id,
+            "domain": self.domain,
+            "instructions": self.instructions,
+            "limits": asdict(self.limits),
+            "provider": getattr(self.llm, "provider", ""),
+            "model": getattr(self.llm, "model", ""),
+            "phase": self.phase,
+            "step": self.step,
+            "no_progress_rounds": self.no_progress_rounds,
+            "loop_done": self.loop_done,
+            "finalize_index": self.finalize_index,
+            "final_raw": self.final_raw[:50000],
+            "messages": self.messages,
+            "search_count": self.search_count,
+            "fetch_count": self.fetch_count,
+            "local_query_count": self.local_query_count,
+            "ckan_calls": self.ckan.calls,
+            "seen_queries": sorted(self.seen_queries),
+            "seen_urls": sorted(self.seen_urls),
+            "seen_dataset_requests": sorted(self.seen_dataset_requests),
+            "fetch_status": self.fetch_status,
+            "url_titles": self.url_titles,
+            "retrieved_text": self.retrieved_text,
+            "dataset_evidence": self.dataset_evidence,
+            "findings": self.findings,
+            "open_questions": self.open_questions,
+            "trace": trace,
+            "elapsed_s": self._elapsed(),
+            "checkpoint_at": iso_now(),
+        }
+
+    def restore_state(self, state: dict) -> None:
+        if state.get("state_version") != STATE_VERSION:
+            raise ValueError(f"Unsupported checkpoint state version {state.get('state_version')}")
+        self.run_id = state.get("run_id") or self.run_id
+        self.domain = state["domain"]
+        self.instructions = state.get("instructions", "")
+        self.phase = state.get("phase", "mapping")
+        self.step = int(state.get("step", 0))
+        self.no_progress_rounds = int(state.get("no_progress_rounds", 0))
+        self.loop_done = bool(state.get("loop_done"))
+        self.finalize_index = state.get("finalize_index")
+        self.final_raw = state.get("final_raw", "")
+        self.messages = list(state.get("messages", []))
+        self.search_count = int(state.get("search_count", 0))
+        self.fetch_count = int(state.get("fetch_count", 0))
+        self.local_query_count = int(state.get("local_query_count", 0))
+        self.ckan.calls = int(state.get("ckan_calls", 0))
+        self.seen_queries = set(state.get("seen_queries", []))
+        self.seen_urls = set(state.get("seen_urls", []))
+        self.seen_dataset_requests = set(state.get("seen_dataset_requests", []))
+        self.fetch_status = dict(state.get("fetch_status", {}))
+        self.url_titles = dict(state.get("url_titles", {}))
+        self.retrieved_text = dict(state.get("retrieved_text", {}))
+        self.dataset_evidence = dict(state.get("dataset_evidence", {}))
+        self.findings = list(state.get("findings", []))
+        self.open_questions = list(state.get("open_questions", []))
+        trace = state.get("trace") or {}
+        for key, value in trace.items():
+            self.trace[key] = value
+        for key in ("local_queries", "api_errors", "resumes"):
+            self.trace.setdefault(key, [])
+        self.trace.setdefault("token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
+                                              "model_calls": 0})
+        self.ckan.log = list(trace.get("api_calls", []))
+        self.elapsed_before = float(state.get("elapsed_s", 0.0))
+        self.started = time.monotonic()
+
+    def _summary(self, label: str) -> dict:
+        statuses = [c.get("status") for c in self.trace["candidates"].values()]
+        return {
+            "label": label, "step": self.step, "phase": self.phase, "searches": self.search_count,
+            "fetches": self.fetch_count, "api_calls": self.ckan.calls, "local_queries": self.local_query_count,
+            "candidates": len(statuses), "surviving": statuses.count("surviving"),
+            "rejected": statuses.count("rejected"), "findings": len(self.findings),
+            "verified_findings": sum(1 for f in self.findings if f.get("verified")),
+            "token_usage": dict(self.trace["token_usage"]), "api_errors": len(self.trace["api_errors"]),
+            "elapsed_s": self._elapsed(),
+        }
+
+    def _checkpoint(self, label: str, status: str = "running", error: str = "") -> None:
+        try:
+            self.checkpointer.save(label, self.phase, self.export_state(), self._summary(label),
+                                   status=status, error=error)
+        except Exception as exc:  # noqa: BLE001 - durability problems must not kill the research
+            self.trace["warnings"].append(f"Checkpoint failed ({label}): {exc}")
+
+    def _touch(self, label: str) -> None:
+        try:
+            self.checkpointer.touch(label, self.phase)
+        except Exception as exc:  # noqa: BLE001
+            self.trace["warnings"].append(f"Heartbeat failed: {exc}")
 
     # ----------------------------------------------------------------- tools
     def _budget(self) -> dict:
@@ -293,6 +552,7 @@ class ResearchAgent:
             results = self.search_fn(query, num_results=num_results)
         except SearchError as exc:
             entry["error"] = str(exc)
+            self._api_error("serper", exc)
             self._emit(f"Search failed: {exc}", "error")
             return {"error": str(exc), **self._budget()}, True
         entry["results"] = [{"title": r["title"], "url": r["url"], "primary": r["primary_source"]} for r in results]
@@ -400,6 +660,7 @@ class ResearchAgent:
         result = {"ok": False, "error": f"{what}: {exc}", "error_kind": exc.kind, "http_status": exc.http_status}
         if exc.kind == "blocked":
             result["guidance"] = BLOCKED_SOURCE_GUIDANCE
+        self._api_error("data.gov.il", f"{what}: {exc}")
         self._emit(f"Official source unavailable — evidence not verified ({what}: {exc})", "error")
         return result
 
@@ -517,6 +778,157 @@ class ResearchAgent:
                                       "official": is_primary_source(url), "source_type": "dataset",
                                       "resource_id": resource_id}
 
+    # ------------------------------------------------------- local snapshots
+    def _gov(self) -> "local_data.GovernmentData":
+        if self.gov_data is None:
+            self.gov_data = local_data.get_default()
+        return self.gov_data
+
+    def _local_budget(self) -> dict:
+        return {"local_queries_left": self.limits.max_local_queries - self.local_query_count}
+
+    def _local_call(self, tool: str, args: dict, fn) -> tuple[dict, bool]:
+        if self._duplicate_dataset_request(tool, args):
+            return {"error": "Duplicate local query rejected: already run with the same arguments."}, False
+        if self.local_query_count >= self.limits.max_local_queries:
+            return {"error": "Local dataset query limit reached. Work with the records you already have."}, False
+        self.local_query_count += 1
+        entry = {"tool": tool, "args": {k: v for k, v in args.items() if k not in ("phase", "purpose")},
+                 "error": "", "total_matches": None, "record_ids": []}
+        self.trace["local_queries"].append(entry)
+        try:
+            out = fn()
+        except (local_data.LocalDataError, ValueError, OSError) as exc:
+            entry["error"] = str(exc)
+            self._api_error("local_snapshot", exc)
+            self._emit(f"Local dataset query failed: {exc}", "error")
+            return {"error": str(exc), **self._local_budget()}, True
+        records = out.get("records") or ([out] if out.get("found") else [])
+        entry["total_matches"] = out.get("total_matches", len(records))
+        entry["record_ids"] = [f"{r['dataset']}:{r['record_id']}" for r in records][:50]
+        prov = out.get("provenance") or {}
+        versions = [prov.get("snapshot_version")] if "snapshot_version" in prov else [
+            p.get("snapshot_version") for p in prov.values() if isinstance(p, dict)]
+        entry["snapshot_versions"] = sorted({v for v in versions if v})
+        if records:
+            self._record_local_evidence(records, out)
+        return {**out, **self._local_budget()}, True
+
+    def _record_local_evidence(self, records: list[dict], out: dict) -> None:
+        by_ds: dict[str, list[dict]] = {}
+        for r in records:
+            by_ds.setdefault(r["dataset"], []).append(r)
+        provenance = out.get("provenance") or {}
+        for ds, recs in by_ds.items():
+            prov = provenance.get(ds) if "dataset" not in provenance else provenance
+            prov = prov or self._gov().provenance(ds)
+            resource_id = prov.get("resource_id") or recs[0].get("resource_id", "")
+            text = "\n".join(r["record_line"] for r in recs)
+            previous = self.dataset_evidence.get(resource_id)
+            if previous and previous.get("status") == "ok":
+                previous["evidence_text"] += "\n" + text
+                previous.setdefault("snapshot_version", prov.get("snapshot_version", ""))
+            else:
+                self.dataset_evidence[resource_id] = {
+                    "resource_id": resource_id, "status": "ok", "error": "", "reason": "", "evidence_text": text,
+                    "dataset_id": prov.get("dataset_id", ""), "dataset_title": prov.get("dataset_title", ""),
+                    "resource_name": prov.get("resource_name", ""), "publisher": prov.get("publisher", ""),
+                    "license": prov.get("license", ""), "source_url": prov.get("source_url", ""),
+                    "resource_last_modified": prov.get("resource_last_modified", ""),
+                    "dataset_last_updated": "", "snapshot_version": prov.get("snapshot_version", ""),
+                    "retrieved_at": prov.get("retrieved_at", ""), "source_kind": "local_snapshot",
+                }
+            url = prov.get("source_url")
+            if url:
+                key = normalize_url(url)
+                self.retrieved_text[key] = self.retrieved_text.get(key, "") + "\n" + text
+                self.fetch_status[key] = {"ok": True, "error": "", "http_status": None, "official": is_primary_source(url),
+                                          "source_type": "dataset", "resource_id": resource_id}
+
+    @staticmethod
+    def _fit(out: dict) -> dict:
+        """Keep a local query result within MAX_LOCAL_RESULT_CHARS (drop trailing records, say so)."""
+        records = out.get("records")
+        if not records:
+            return out
+        while len(records) > 1 and len(json.dumps(out, ensure_ascii=False)) > MAX_LOCAL_RESULT_CHARS:
+            records.pop()
+            out["returned"] = len(records)
+            out["next_offset"] = out.get("offset", 0) + len(records)
+            out["truncated"] = "Result shortened to fit the context budget; use offset to continue."
+        return out
+
+    def _tool_local_list(self, args: dict) -> tuple[dict, bool]:
+        self._emit(args.get("purpose") or "Listing local official government datasets", "dataset")
+        return self._local_call("list_local_government_datasets", args, lambda: self._gov().list_datasets())
+
+    def _tool_local_search(self, args: dict) -> tuple[dict, bool]:
+        dataset = str(args.get("dataset", "")).strip() or "all"
+        query = str(args.get("query", "")).strip()
+        if not query and not args.get("filters"):
+            return {"error": "query (or filters) is required"}, False
+        self._emit(args.get("purpose") or f"Querying local official dataset {dataset}: {query}", "dataset")
+
+        def run():
+            return self._fit(self._gov().search(dataset, query, args.get("filters"),
+                                                args.get("limit", local_data.DEFAULT_LIMIT), args.get("offset", 0)))
+
+        return self._local_call("search_local_government_records", args, run)
+
+    def _tool_local_get(self, args: dict) -> tuple[dict, bool]:
+        dataset, record_id = str(args.get("dataset", "")).strip(), str(args.get("record_id", "")).strip()
+        if not dataset or not record_id:
+            return {"error": "dataset and record_id are required"}, False
+        self._emit(args.get("purpose") or f"Reading local official record {dataset}:{record_id}", "dataset")
+        return self._local_call("get_local_government_record", args,
+                                lambda: self._gov().get_record(dataset, record_id))
+
+    def _tool_snapshot_status(self, args: dict) -> tuple[dict, bool]:
+        try:
+            return self._gov().status(), True
+        except (local_data.LocalDataError, ValueError, OSError) as exc:
+            return {"error": str(exc)}, True
+
+    # -------------------------------------------------------------- findings
+    def _tool_findings(self, args: dict) -> tuple[dict, bool]:
+        findings, questions = args.get("findings") or [], args.get("open_questions") or []
+        if not isinstance(findings, list) or not isinstance(questions, list):
+            return {"error": "findings and open_questions must be lists"}, False
+        results = []
+        known = {f["statement"] for f in self.findings}
+        for f in findings[:20]:
+            if not isinstance(f, dict) or not str(f.get("statement", "")).strip():
+                continue
+            statement = str(f["statement"]).strip()[:2000]
+            try:
+                src = SourceRef(url=str(f.get("source_url", "")), excerpt=str(f.get("excerpt", ""))[:1000],
+                                resource_id=str(f.get("resource_id", "")))
+            except ValueError:
+                results.append({"statement": statement, "verified": False, "note": "source_url must be http(s)"})
+                continue
+            self._verify_source(src, require_excerpt=True)
+            entry = {"statement": statement, "source_url": src.url, "excerpt": src.excerpt,
+                     "resource_id": src.resource_id, "official": bool(src.official),
+                     "verified": bool(src.verified and src.official), "kind": src.kind,
+                     "verification_note": src.verification_note, "step": self.step + 1, "at": iso_now()}
+            if src.kind == "dataset" and src.resource_id in self.dataset_evidence:
+                entry["snapshot_version"] = self.dataset_evidence[src.resource_id].get("snapshot_version", "")
+            if statement in known:
+                self.findings = [entry if x["statement"] == statement else x for x in self.findings]
+            elif len(self.findings) < MAX_FINDINGS:
+                self.findings.append(entry)
+                known.add(statement)
+            results.append({"statement": statement[:200], "verified": entry["verified"],
+                            "note": entry["verification_note"]})
+        for q in questions[:20]:
+            q = str(q).strip()[:1000]
+            if q and q not in self.open_questions and len(self.open_questions) < MAX_OPEN_QUESTIONS:
+                self.open_questions.append(q)
+        verified = sum(1 for r in results if r["verified"])
+        self._emit(f"Findings recorded: {len(results)} ({verified} verified), open questions: "
+                   f"{len(self.open_questions)}", "candidates")
+        return {"recorded": len(results), "results": results, "open_questions": len(self.open_questions)}, True
+
     def _tool_candidates(self, args: dict) -> tuple[dict, bool]:
         items = args.get("candidates")
         if not isinstance(items, list):
@@ -550,6 +962,11 @@ class ResearchAgent:
                 "search_government_datasets": self._tool_dataset_search,
                 "inspect_government_dataset": self._tool_dataset_inspect,
                 "read_government_resource": self._tool_dataset_read,
+                "list_local_government_datasets": self._tool_local_list,
+                "search_local_government_records": self._tool_local_search,
+                "get_local_government_record": self._tool_local_get,
+                "get_government_snapshot_status": self._tool_snapshot_status,
+                "record_findings": self._tool_findings,
             }.get(name)
             if handler is None:
                 result, progress = {"error": f"Unknown tool '{name}'"}, False
@@ -562,8 +979,17 @@ class ResearchAgent:
         return result, progress
 
     # ------------------------------------------------------------------ loop
-    def _call_llm(self, step: int, messages: list[dict], **kwargs):
-        resp = self.llm.chat(messages, **kwargs)
+    def _call_llm(self, step, messages: list[dict], **kwargs):
+        try:
+            resp = self.llm.chat(messages, **kwargs)
+        except LLMError as exc:
+            self._api_error("model", exc)
+            raise
+        usage = resp.usage or {}
+        totals = self.trace["token_usage"]
+        totals["model_calls"] = totals.get("model_calls", 0) + 1
+        for k in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+            totals[k] = totals.get(k, 0) + int(usage.get(k, 0) or 0)
         self.trace["model_calls"].append({
             "step": step, "duration_s": resp.duration_s, "finish_reason": resp.finish_reason,
             "tool_calls": len(resp.tool_calls), "usage": resp.usage,
@@ -582,38 +1008,99 @@ class ResearchAgent:
         return content
 
     def run(self, domain: str, instructions: str = "") -> RunResult:
-        run = RunResult(domain=domain, trace=self.trace)
+        run = RunResult(domain=domain, trace=self.trace, run_id=self.run_id)
         self.domain = domain
-        lim = self.limits
         instructions = (instructions or "").strip()
         if len(instructions) > MAX_INSTRUCTIONS_CHARS:
             instructions = instructions[:MAX_INSTRUCTIONS_CHARS]
             self.trace["warnings"].append(f"Custom instructions truncated to {MAX_INSTRUCTIONS_CHARS} characters.")
+        self.instructions = instructions
         self.trace["custom_instructions"] = instructions
-        messages: list[dict] = [
+        self.messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": self.build_user_message(domain, instructions)},
         ]
         suffix = " (with custom instructions)" if instructions else ""
         self._emit(f"Starting research on: {domain}{suffix}", "start")
+        self._checkpoint("research started")
+        return self._drive(run, start_step=1)
 
-        no_progress_rounds = 0
+    def resume(self, state: dict) -> RunResult:
+        """Continue an interrupted run from its last checkpoint (same conversation, budgets and evidence)."""
+        self.restore_state(state)
+        run = RunResult(domain=self.domain, trace=self.trace, run_id=self.run_id)
+        repaired = self._repair_dangling_tool_calls()
+        self.trace["resumes"].append({"at": iso_now(), "from_step": self.step, "loop_done": self.loop_done,
+                                      "repaired_tool_calls": repaired})
+        where = "finalization" if self.loop_done else f"step {self.step + 1}"
+        self._emit(f"Resuming research from the last checkpoint ({where}).", "start")
+        self._checkpoint(f"resumed at {where}")
+        return self._drive(run, start_step=self.step + 1)
+
+    def _repair_dangling_tool_calls(self) -> int:
+        """If the process died between a model response and its tool results, answer the missing calls."""
+        answered = {m.get("tool_call_id") for m in self.messages if m.get("role") == "tool"}
+        repaired = 0
+        for i in range(len(self.messages) - 1, -1, -1):
+            m = self.messages[i]
+            if m.get("role") == "assistant":
+                for tc in m.get("tool_calls") or []:
+                    if tc["id"] not in answered:
+                        self.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(
+                            {"error": INTERRUPTED_TOOL_RESULT}, ensure_ascii=False)})
+                        repaired += 1
+                break
+        return repaired
+
+    def _drive(self, run: RunResult, start_step: int) -> RunResult:
+        try:
+            if not self.loop_done:
+                fatal = self._research_loop(run, start_step)
+                if fatal:
+                    return self._finish(run)
+                self.loop_done = True
+                self._emit(f"Research loop ended ({run.stop_reason}).", "info")
+                self.phase = "ranking"
+                self._checkpoint(f"research loop ended: {run.stop_reason}")
+            else:
+                run.stop_reason = self.trace.get("stop_reason") or "resumed for finalization"
+            self._finalize(run)
+        except Exception as exc:  # noqa: BLE001 - never lose the persisted research to an unexpected error
+            run.error = f"Unexpected error: {exc.__class__.__name__}: {exc}"
+            self.trace["warnings"].append(run.error)
+            self._api_error("agent", run.error)
+            self._checkpoint("unexpected error", status="failed", error=run.error)
+        except BaseException as exc:  # KeyboardInterrupt / SystemExit: persist, then stop
+            run.error = f"Interrupted: {exc.__class__.__name__}"
+            self._checkpoint("interrupted", status="interrupted", error=run.error)
+            self._finish(run, status="interrupted")
+            raise
+        return self._finish(run)
+
+    def _research_loop(self, run: RunResult, start_step: int) -> bool:
+        """Returns True if the run cannot continue at all (model unavailable on the very first step)."""
+        lim = self.limits
         run.stop_reason = "step limit reached"
-        for step in range(1, lim.max_steps + 1):
+        for step in range(start_step, lim.max_steps + 1):
             if self.search_count >= lim.max_searches and self.fetch_count >= lim.max_fetches:
                 run.stop_reason = "search and fetch budgets exhausted"
                 break
+            self._touch(f"Waiting for the model (step {step})")
             try:
-                resp = self._call_llm(step, messages, tools=TOOLS)
+                resp = self._call_llm(step, self.messages, tools=TOOLS)
             except LLMError as exc:
                 self.trace["warnings"].append(f"Model error at step {step}: {exc}")
                 self._emit(f"Model error: {exc}", "error")
                 run.stop_reason = f"model error: {exc}"
                 if step == 1:
                     run.error = str(exc)
-                    return self._finish(run)
+                    self._checkpoint("model error at step 1", status="failed", error=run.error)
+                    return True
+                self._checkpoint(f"model error at step {step}")
                 break
-            messages.append(resp.message)
+            self.messages.append(resp.message)
+            self.step = step  # the step is consumed once the model has answered
+            self._checkpoint(f"model response (step {step})")
             if not resp.tool_calls:
                 run.stop_reason = "model finished research"
                 break
@@ -622,41 +1109,50 @@ class ResearchAgent:
             for tc in resp.tool_calls:
                 result, progress = self._dispatch(step, tc.name, tc.arguments)
                 progressed = progressed or progress
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, ensure_ascii=False)})
+                self.messages.append({"role": "tool", "tool_call_id": tc.id,
+                                      "content": json.dumps(result, ensure_ascii=False)})
+                self._checkpoint(f"tool {tc.name} (step {step})")
 
-            no_progress_rounds = 0 if progressed else no_progress_rounds + 1
-            if no_progress_rounds >= MAX_NO_PROGRESS_ROUNDS:
+            self.no_progress_rounds = 0 if progressed else self.no_progress_rounds + 1
+            if self.no_progress_rounds >= MAX_NO_PROGRESS_ROUNDS:
                 run.stop_reason = "stopped: repeated duplicate or rejected tool calls"
                 self.trace["warnings"].append(run.stop_reason)
                 break
+        self.trace["stop_reason"] = run.stop_reason
+        return False
 
-        self._emit(f"Research loop ended ({run.stop_reason}).", "info")
-        self.phase = "ranking"
-        self._finalize(run, messages)
-        return self._finish(run)
-
-    def _finalize(self, run: RunResult, messages: list[dict]) -> None:
+    def _finalize(self, run: RunResult) -> None:
         self._emit("Writing and validating the final report", "info")
+        # On resume after a crash during finalization, restart finalization from a clean history.
+        if self.finalize_index is None:
+            self.finalize_index = len(self.messages)
+        else:
+            self.messages = self.messages[: self.finalize_index]
         prompt = FINALIZE_PROMPT.replace("{max_opportunities}", str(self.limits.max_opportunities))
-        messages.append({"role": "user", "content": prompt})
+        self.messages.append({"role": "user", "content": prompt})
         last_error = ""
         for attempt in (1, 2):
+            self._checkpoint(f"before final report (attempt {attempt})")
             try:
-                resp = self._call_llm(f"final-{attempt}", messages, json_mode=True)
+                resp = self._call_llm(f"final-{attempt}", self.messages, json_mode=True)
             except LLMError as exc:
                 run.error = f"Final report failed: {exc}"
+                self._checkpoint("final report failed", status="failed", error=run.error)
                 return
-            messages.append(resp.message)
+            self.messages.append(resp.message)
+            self.final_raw = resp.content or ""
+            self._checkpoint(f"final report received (attempt {attempt})")
             try:
                 result = parse_research_result(resp.content)
             except ValueError as exc:
                 last_error = str(exc)
                 self.trace["warnings"].append(f"Final output attempt {attempt} invalid: {last_error[:500]}")
-                messages.append({"role": "user", "content": REPAIR_PROMPT.format(error=last_error[:2000])})
+                self.messages.append({"role": "user", "content": REPAIR_PROMPT.format(error=last_error[:2000])})
                 continue
             run.result = self._post_process(result)
             return
         run.error = f"The model did not return a valid report after 2 attempts. Last error: {last_error[:1000]}"
+        self._checkpoint("final report invalid", status="failed", error=run.error)
 
     def _verify_source(self, src, require_excerpt: bool) -> None:
         """Fill provenance and verification from what this run actually retrieved (never from the model)."""
@@ -713,6 +1209,9 @@ class ResearchAgent:
         else:
             src.verification_note = "Retrieved during this run" + (
                 "; the quoted excerpt was found in the source." if src.excerpt_verified else ".")
+        if record is not None and record.get("snapshot_version") and retrieved:
+            src.verification_note += (f" Evidence from the local official snapshot {record['snapshot_version']} "
+                                      f"(retrieved from data.gov.il {record.get('retrieved_at', '')}).")
 
     def _verify_opportunity(self, opp) -> None:
         for src in opp.primary_sources:
@@ -759,11 +1258,29 @@ class ResearchAgent:
             result.no_opportunity_reason = NO_RESULT_MESSAGE
         return result
 
-    def _finish(self, run: RunResult) -> RunResult:
+    def _finish(self, run: RunResult, status: str | None = None) -> RunResult:
         self.trace["stop_reason"] = run.stop_reason
-        self.trace["elapsed_s"] = round(time.monotonic() - self.started, 1)
+        self.trace["elapsed_s"] = self._elapsed()
         self.trace["api_calls"] = list(self.ckan.log)
+        self.trace["findings"] = self.findings
+        self.trace["open_questions"] = self.open_questions
         if run.result is not None:
             self.trace["final"] = run.result.model_dump()
-        self._emit("Research complete." if not run.error else f"Research ended with an error: {run.error}", "done")
+        run.status = status or ("completed" if run.result is not None else "failed")
+        if run.result is None:
+            # Never lose the run: build a clearly labelled report from the persisted evidence only.
+            try:
+                run.partial_report = partial_report.build(self.export_state(), status=run.status, error=run.error)
+            except Exception as exc:  # noqa: BLE001
+                self.trace["warnings"].append(f"Partial report generation failed: {exc}")
+        try:
+            self.checkpointer.save("finished: " + run.status, self.phase, self.export_state(),
+                                   self._summary("finished: " + run.status), status=run.status, error=run.error)
+            self.checkpointer.finish(run.status, run.error,
+                                     final_report=run.result.model_dump() if run.result is not None else None,
+                                     partial_report=run.partial_report)
+        except Exception as exc:  # noqa: BLE001
+            self.trace["warnings"].append(f"Final checkpoint failed: {exc}")
+        if status != "interrupted":
+            self._emit("Research complete." if not run.error else f"Research ended with an error: {run.error}", "done")
         return run

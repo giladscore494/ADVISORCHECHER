@@ -26,8 +26,9 @@ def test_missing_keys_disable_button(monkeypatch):
 def _run_ui(monkeypatch, responses, domain="equipment rental", instructions=None):
     monkeypatch.setenv("KIMI_API_KEY", "k")
     monkeypatch.setenv("SERPER_API_KEY", "k")
+    monkeypatch.setenv("RESEARCH_RUN_MODE", "inline")
     fake = FakeLLM(responses)
-    monkeypatch.setattr(llm, "LLMClient", lambda: fake)
+    monkeypatch.setattr(llm, "LLMClient", lambda provider=None: fake)
     real = agent.ResearchAgent
     monkeypatch.setattr(agent, "ResearchAgent", lambda client, **kw: real(client, search_fn=fake_search, fetch_fn=fake_fetch, **kw))
     at = AppTest.from_file(APP, default_timeout=30).run()
@@ -130,6 +131,7 @@ def test_dataset_trace_and_provenance_rendered(monkeypatch):
     monkeypatch.setattr(fetcher, "_is_public_host", lambda host: True)
     monkeypatch.setenv("KIMI_API_KEY", "k")
     monkeypatch.setenv("SERPER_API_KEY", "k")
+    monkeypatch.setenv("RESEARCH_RUN_MODE", "inline")
     page = f"https://data.gov.il/dataset/official-standards/resource/{STD_RESOURCE_ID}"
     report = valid_report(URL)
     report["opportunities"][0]["primary_sources"] = [
@@ -143,7 +145,7 @@ def test_dataset_trace_and_provenance_rendered(monkeypatch):
         text_response("DONE"),
         text_response(json.dumps(report)),
     ])
-    monkeypatch.setattr(llm, "LLMClient", lambda: fake)
+    monkeypatch.setattr(llm, "LLMClient", lambda provider=None: fake)
     real = agent.ResearchAgent
     ckan = datagov.CkanClient(session=standard_session(), min_interval=0)
     monkeypatch.setattr(agent, "ResearchAgent", lambda client, **kw: real(
@@ -159,3 +161,132 @@ def test_dataset_trace_and_provenance_rendered(monkeypatch):
     assert "Publisher: משרד הכלכלה והתעשייה" in md and "(not a legal date)" in md
     label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
     assert "Class A" in label and "✅ Evidence verified" in label
+
+
+# ------------------------------------------------------------ recovery UI
+import research_runner  # noqa: E402
+import research_store  # noqa: E402
+from helpers import EXCERPT  # noqa: E402
+
+RESEARCH = [
+    tool_response(("search_web", {"query": "פטור השכרה"})),
+    tool_response(("fetch_url", {"url": URL}),
+                  ("update_candidates", {"candidates": [{"name": "Equipment rental", "status": "surviving"}]})),
+    tool_response(("record_findings", {"findings": [{"statement": "Yearly inspection required", "source_url": URL,
+                                                     "excerpt": EXCERPT}]})),
+    text_response("DONE"),
+]
+
+
+class FinalCrash(FakeLLM):
+    def chat(self, messages, tools=None, json_mode=False):
+        if json_mode:
+            raise RuntimeError("worker lost while generating the final JSON")
+        return super().chat(messages, tools, json_mode)
+
+
+def _failed_run():
+    store = research_store.get_store()
+    run_id, run = research_runner.start(store, "equipment rental", "", agent.Limits(), "kimi", background=False,
+                                        llm_factory=lambda p: FinalCrash(list(RESEARCH)),
+                                        agent_kwargs={"search_fn": fake_search, "fetch_fn": fake_fetch})
+    return store, run_id
+
+
+def _labels(at, kind):
+    return [e.proto.label for e in at.get(kind)]
+
+
+def test_failed_run_recovered_from_url_shows_partial_report_and_resume(monkeypatch):
+    monkeypatch.setenv("KIMI_API_KEY", "k")
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    monkeypatch.setenv("RESEARCH_RUN_MODE", "inline")
+    store, run_id = _failed_run()
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.query_params["run"] = run_id
+    at.run()
+    assert not at.exception
+    md = " ".join(m.value for m in at.markdown)
+    assert f"**Run ID:** `{run_id}`" in md and "❌ failed" in md
+    assert "VERIFIED findings" in md and "Yearly inspection required" in md and "WORKING HYPOTHESES" in md
+    assert any("NOT a validated final report" in w.value for w in at.warning)
+    assert any("worker lost" in e.value for e in at.error)
+    downloads = _labels(at, "download_button")
+    assert {"Download partial report (Markdown)", "Download partial report (JSON)",
+            "Download research trace (JSON)"} <= set(downloads)
+    assert any("Last successful checkpoint" in c.value for c in at.caption)
+
+    # Resume the run from the UI: finalization only, then the validated report is shown.
+    monkeypatch.setattr(llm, "LLMClient", lambda provider=None: FakeLLM([text_response(json.dumps(valid_report(URL)))]))
+    real = agent.ResearchAgent
+    monkeypatch.setattr(agent, "ResearchAgent", lambda client, **kw: real(client, search_fn=fake_search,
+                                                                          fetch_fn=fake_fetch, **kw))
+    resume = next(b for b in at.button if b.label == "Resume research from last checkpoint")
+    resume.click().run()
+    assert not at.exception
+    assert store.load(run_id)["status"] == "completed"
+    assert any(e.label.startswith("Inspection equipment rental 0") for e in at.expander)
+    md = " ".join(m.value for m in at.markdown)
+    assert "✅ completed" in md
+
+
+def test_interrupted_run_detected_and_recovered_by_id(monkeypatch):
+    monkeypatch.setenv("KIMI_API_KEY", "k")
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    store = research_store.get_store()
+    store.create_run("20261007-000000-deadbeefdeadbeef", "imports", {"provider": "kimi", "limits": {}})
+    store.save_checkpoint("20261007-000000-deadbeefdeadbeef", "tool search_web (step 1)", "searching",
+                          {"state_version": 1, "domain": "imports", "search_count": 1,
+                           "trace": {"searches": [{"query": "יבוא אישי", "results": [], "error": ""}]}},
+                          {"step": 1, "searches": 1})
+    old = research_store.ts(research_store.utc_now().replace(year=2020))
+    store._execute([("UPDATE research_runs SET heartbeat_at = ?", (old,))])
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.text_input(key="recover_run_id").input("20261007-000000-deadbeefdeadbeef").run()
+    next(b for b in at.button if b.label == "Load run").click().run()
+    assert not at.exception
+    assert any("was interrupted" in e.value for e in at.error)
+    md = " ".join(m.value for m in at.markdown)
+    assert "⚠️ interrupted" in md and "יבוא אישי" in md
+    assert any(b.label == "Resume research from last checkpoint" for b in at.button)
+
+
+def test_unknown_run_id(monkeypatch):
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.query_params["run"] = "nope"
+    at.run()
+    assert any("was not found" in e.value for e in at.error)
+
+
+def test_background_run_completes_and_renders(monkeypatch):
+    monkeypatch.setenv("KIMI_API_KEY", "k")
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    monkeypatch.setenv("RESEARCH_RUN_MODE", "background")
+    fake = FakeLLM([tool_response(("search_web", {"query": "פטור"})), tool_response(("fetch_url", {"url": URL})),
+                    text_response("DONE"), text_response(json.dumps(valid_report(URL)))])
+    monkeypatch.setattr(llm, "LLMClient", lambda provider=None: fake)
+    real = agent.ResearchAgent
+    monkeypatch.setattr(agent, "ResearchAgent", lambda client, **kw: real(client, search_fn=fake_search,
+                                                                          fetch_fn=fake_fetch, **kw))
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.text_input[0].input("equipment rental").run()
+    at.button[0].click().run()
+    assert not at.exception
+    run_id = at.session_state["run_id"]
+    assert research_runner.wait(run_id, timeout=30)
+    at.run()
+    assert any(e.label.startswith("Inspection equipment rental 0") for e in at.expander)
+    assert research_store.get_store().load(run_id)["status"] == "completed"
+
+
+def test_snapshot_status_and_provider_choice(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    monkeypatch.setenv("KIMI_API_KEY", "k")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert any("Local official datasets: 5 validated snapshots" in e.label for e in at.expander)
+    box = at.selectbox[0]
+    assert box.options[2].startswith("OpenAI · gpt-6.1-sol") and "(API key not configured)" in box.options[2]
+    box.select("openai").run()
+    assert any("OPENAI_API_KEY" in e.value for e in at.error)
+    assert at.button[0].disabled
