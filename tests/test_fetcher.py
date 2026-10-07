@@ -110,3 +110,60 @@ def test_primary_source_and_serper_parsing():
         {"title": "no link"},
     ]})
     assert results == [{"title": "A", "url": "https://www.gov.il/a", "snippet": "s", "position": 1, "primary_source": True}]
+
+
+# ------------------------------------------------- retries, 403 and robots.txt
+import pytest  # noqa: E402
+
+
+class CountingSession(FakeSession):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.urls = []
+
+    def get(self, url, **kwargs):
+        self.urls.append(url)
+        return super().get(url, **kwargs)
+
+
+def test_transient_429_retried_then_ok(monkeypatch):
+    _public(monkeypatch)
+    sleeps = []
+    monkeypatch.setattr(fetcher, "_sleep", sleeps.append)
+    s = CountingSession([FakeResp(status=429), FakeResp(body=b"<p>law text</p>")])
+    res = fetch_url("https://www.gov.il/x", session=s)
+    assert res.ok and res.attempts == 2 and sleeps == [1.0]
+
+
+def test_transient_503_gives_up_after_cap(monkeypatch):
+    _public(monkeypatch)
+    s = CountingSession([FakeResp(status=503)] * 5)
+    res = fetch_url("https://www.gov.il/x", session=s)
+    assert not res.ok and res.http_status == 503 and "gave up after 3 attempts" in res.error
+    assert len(s.urls) == 1 + fetcher.MAX_RETRIES
+
+
+def test_403_single_request_access_restricted(monkeypatch):
+    _public(monkeypatch)
+    s = CountingSession([FakeResp(status=403)] * 3)
+    res = fetch_url("https://www.gov.il/x", session=s)
+    assert res.access_restricted and len(s.urls) == 1
+
+
+@pytest.mark.robots
+def test_robots_disallow_is_respected(monkeypatch):
+    _public(monkeypatch)
+    robots = FakeResp(body=b"User-agent: *\nDisallow: /private/\n", ctype="text/plain")
+    s = CountingSession([robots, FakeResp(body=b"<p>public</p>")])
+    blocked = fetch_url("https://www.gov.il/private/doc", session=s)
+    assert not blocked.ok and blocked.access_restricted and "robots.txt" in blocked.error
+    assert s.urls == ["https://www.gov.il/robots.txt"]  # the disallowed page itself was never requested
+    allowed = fetch_url("https://www.gov.il/public/doc", session=s)
+    assert allowed.ok and s.urls[-1] == "https://www.gov.il/public/doc"  # robots.txt cached per host
+
+
+@pytest.mark.robots
+def test_missing_robots_allows(monkeypatch):
+    _public(monkeypatch)
+    s = CountingSession([FakeResp(status=404), FakeResp(body=b"<p>ok</p>")])
+    assert fetch_url("https://example.org/a", session=s).ok

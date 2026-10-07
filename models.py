@@ -25,11 +25,22 @@ class SourceRef(BaseModel):
     url: str
     section: str = ""
     support: str = ""
-    # Set by the agent after the run (not by the model): was this URL retrieved and read in this run,
-    # and is it an official source? Any value the model supplies is overwritten.
+    # Supplied by the model: a verbatim quote from the retrieved content supporting the claim, dataset
+    # identifiers for data.gov.il evidence, and the legal effective date stated in the legal text (if any).
+    excerpt: str = ""
+    dataset_id: str = ""
+    resource_id: str = ""
+    legal_effective_date: str = ""
+    # Set by the agent after the run (not by the model); any value the model supplies is discarded.
     verified: bool | None = None
     official: bool | None = None
     verification_note: str = ""
+    kind: str = ""  # legal_document | dataset | web
+    excerpt_verified: bool | None = None
+    retrieval_status: str = ""  # ok | failed | rejected | no_matching_records | metadata_only | not_retrieved
+    dataset_title: str = ""
+    publisher: str = ""
+    last_updated: str = ""  # dataset/resource update date, NOT a legal effective date
 
     @field_validator("url")
     @classmethod
@@ -101,7 +112,10 @@ def extract_json_object(text: str) -> str:
 
 
 AGENT_OPPORTUNITY_FIELDS = ("unread_primary_sources", "verification_status", "verification_notes", "downgraded_from")
-AGENT_SOURCE_FIELDS = ("verified", "official", "verification_note")
+AGENT_SOURCE_FIELDS = (
+    "verified", "official", "verification_note", "kind", "excerpt_verified", "retrieval_status",
+    "dataset_title", "publisher", "last_updated",
+)
 
 
 def _drop_agent_fields(data: dict) -> None:

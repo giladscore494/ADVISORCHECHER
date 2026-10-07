@@ -118,4 +118,44 @@ def test_unverified_opportunity_is_flagged_and_downgraded(monkeypatch):
     errors = " ".join(e.value for e in at.error)
     assert "Legal finding UNVERIFIED" in errors and "Downgraded from A to B" in errors
     md = " ".join(m.value for m in at.markdown)
-    assert f"❌ [Regulation X]({blocked})" in md and "Not retrieved during this run." in md
+    assert f"❌ [Regulation X]({blocked})" in md and "Not retrieved during this run" in md
+
+
+def test_dataset_trace_and_provenance_rendered(monkeypatch):
+    import datagov
+    import fetcher
+    from ckan_fixtures import PRESERVATION_RESOURCE_ID, STD_RECORD_LINE, STD_RESOURCE_ID, standard_session
+    from helpers import EXCERPT
+
+    monkeypatch.setattr(fetcher, "_is_public_host", lambda host: True)
+    monkeypatch.setenv("KIMI_API_KEY", "k")
+    monkeypatch.setenv("SERPER_API_KEY", "k")
+    page = f"https://data.gov.il/dataset/official-standards/resource/{STD_RESOURCE_ID}"
+    report = valid_report(URL)
+    report["opportunities"][0]["primary_sources"] = [
+        {"title": "Order", "url": URL, "excerpt": EXCERPT},
+        {"title": "Standards", "url": page, "resource_id": STD_RESOURCE_ID, "excerpt": STD_RECORD_LINE},
+    ]
+    fake = FakeLLM([
+        tool_response(("read_government_resource", {"resource_id": PRESERVATION_RESOURCE_ID, "query": "תקן רשמי ברגים"})),
+        tool_response(("read_government_resource", {"resource_id": STD_RESOURCE_ID, "query": "תקן רשמי ברגים"}),
+                      ("fetch_url", {"url": URL})),
+        text_response("DONE"),
+        text_response(json.dumps(report)),
+    ])
+    monkeypatch.setattr(llm, "LLMClient", lambda: fake)
+    real = agent.ResearchAgent
+    ckan = datagov.CkanClient(session=standard_session(), min_interval=0)
+    monkeypatch.setattr(agent, "ResearchAgent", lambda client, **kw: real(
+        client, search_fn=fake_search, fetch_fn=fake_fetch, ckan_client=ckan, **kw))
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.text_input[0].input("industrial fasteners import standards").run()
+    at.button[0].click().run()
+    assert not at.exception
+    md = " ".join(m.value for m in at.markdown)
+    assert "Official government datasets (data.gov.il)" in md
+    assert "⛔" in md and "rejected: unrelated to research topic" in md  # the preservation dataset
+    assert f"]({page})" in md and "records read" in md
+    assert "Publisher: משרד הכלכלה והתעשייה" in md and "(not a legal date)" in md
+    label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
+    assert "Class A" in label and "✅ Evidence verified" in label

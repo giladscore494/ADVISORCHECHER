@@ -2,6 +2,7 @@
 
 import html
 import json
+import re
 import time
 
 import streamlit as st
@@ -25,7 +26,15 @@ VERIFICATION_LABELS = {
     "partially_verified": "⚠️ Partially verified",
     "unverified": "❌ Unverified",
 }
-EVENT_ICONS = {"search": "🔎", "fetch": "📄", "error": "⚠️", "candidates": "🧪", "done": "✅"}
+EVENT_ICONS = {"search": "🔎", "fetch": "📄", "error": "⚠️", "candidates": "🧪", "done": "✅",
+               "dataset": "🗂️", "rejected": "⛔"}
+READ_STATUS_ICONS = {"ok": "✅", "rejected": "⛔", "no_matching_records": "∅", "failed": "❌"}
+_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~])")
+
+
+def md(text) -> str:
+    """Escape untrusted external text (titles, publishers, errors, records) before rendering as Markdown."""
+    return _MD_SPECIAL.sub(r"\\\1", str(text or ""))
 
 st.set_page_config(page_title="Regulatory Opportunity Hunter", page_icon="🔎", layout="wide")
 st.title("Regulatory Opportunity Hunter")
@@ -56,11 +65,12 @@ instructions = st.text_area(
 )
 
 with st.expander("Advanced settings"):
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     max_steps = c1.number_input("Max agent steps", 3, 100, get_int("MAX_AGENT_STEPS", 25))
     max_searches = c2.number_input("Max search calls", 1, 100, get_int("MAX_SEARCHES", 30))
     max_fetches = c3.number_input("Max URLs to read", 0, 100, get_int("MAX_FETCHES", 20))
-    max_opps = c4.number_input("Max final opportunities", 1, 10, 5)
+    max_api_calls = c4.number_input("Max data.gov.il API calls", 0, 200, get_int("MAX_CKAN_CALLS", 40))
+    max_opps = c5.number_input("Max final opportunities", 1, 10, 5)
 
 start = st.button("Start Research", type="primary", disabled=bool(missing) or not domain.strip())
 
@@ -101,7 +111,7 @@ def run_research(domain: str, instructions: str, limits: agent.Limits) -> agent.
 
 
 if start:
-    limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps))
+    limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps), int(max_api_calls))
     st.session_state["run"] = run_research(domain.strip(), instructions.strip(), limits)
     st.session_state["run_at"] = time.strftime("%Y-%m-%d %H:%M")
 
@@ -124,8 +134,16 @@ def source_links(sources) -> None:
             line += f" (§ {s.section})"
         if s.support:
             line += f": {s.support}"
+        if s.kind == "dataset" and (s.dataset_title or s.resource_id):
+            line += (f"  \n  Dataset: {md(s.dataset_title) or 'n/a'} · Publisher: {md(s.publisher) or 'n/a'} · "
+                     f"resource `{md(s.resource_id)}` · last updated {md(s.last_updated) or 'n/a'} (not a legal date)")
+        if s.legal_effective_date:
+            line += f"  \n  Legal effective date (per source): {md(s.legal_effective_date)}"
+        if s.excerpt:
+            mark = "✓" if s.excerpt_verified else "✗"
+            line += f"  \n  > {mark} “{md(s.excerpt)}”"
         if s.verification_note and not (s.verified and s.official):
-            line += f"  \n  _{s.verification_note}_"
+            line += f"  \n  _{md(s.verification_note)}_"
         st.markdown(line)
 
 
@@ -181,6 +199,38 @@ def show_opportunity(opp, expanded: bool) -> None:
             source_links(opp.secondary_sources)
 
 
+def show_dataset_trace(trace: dict) -> None:
+    searches, inspections, reads = (trace.get(k, []) for k in ("dataset_searches", "dataset_inspections", "dataset_reads"))
+    calls = trace.get("api_calls", [])
+    if not (searches or inspections or reads or calls):
+        return
+    st.markdown("**Official government datasets (data.gov.il)**")
+    failed_calls = [c for c in calls if not c["ok"]]
+    st.caption(f"API requests: {sum(1 for c in calls if not c['cached'])} sent, "
+               f"{sum(1 for c in calls if c['cached'])} served from cache, {len(failed_calls)} failed")
+    for d in searches:
+        suffix = f" ❌ {md(d['error'])}" if d["error"] else (
+            f" ({len(d['results'])} datasets, {sum(r['likely_relevant'] for r in d['results'])} likely relevant)")
+        st.markdown(f"- 🗂️ Dataset search `{md(d['query'])}`{suffix}")
+    for d in inspections:
+        icon = {"relevant": "✅", "rejected": "⛔"}.get(d["status"], "❌")
+        title = md(d.get("title") or d["dataset_id"])
+        link = f"[{title}]({d['dataset_url']})" if d.get("dataset_url") else title
+        detail = "rejected: unrelated to research topic" if d["status"] == "rejected" else md(d.get("error", "")) or "relevant"
+        st.markdown(f"- {icon} Inspected {link} · {md(d.get('publisher', ''))} · {detail}")
+    for r in reads:
+        icon = READ_STATUS_ICONS.get(r["status"], "•")
+        name = md(f"{r.get('dataset_title') or r.get('dataset_id') or ''} / {r.get('resource_name') or r['resource_id']}")
+        link = f"[{name}]({r['source_url']})" if r.get("source_url") else name
+        detail = {"ok": "records read", "rejected": "rejected: unrelated to research topic",
+                  "no_matching_records": "no matching records"}.get(r["status"], md(r.get("error", "")))
+        updated = f" · updated {md(r.get('resource_last_modified') or r.get('dataset_last_updated'))}" if (
+            r.get("resource_last_modified") or r.get("dataset_last_updated")) else ""
+        st.markdown(f"- {icon} {link} · {md(r.get('publisher', ''))}{updated} · {detail}")
+    for c in failed_calls:
+        st.markdown(f"- ❌ `{md(c['action'])}` {md(c['error'])} ([request]({c['url']}))")
+
+
 def show_trace(trace: dict) -> None:
     with st.expander("Research Trace"):
         st.caption(
@@ -208,7 +258,8 @@ def show_trace(trace: dict) -> None:
             detail = f"{f['source_type']}, {f['chars']} chars" if f["ok"] else f["error"]
             if f.get("resource_url"):
                 detail += f" · resource: {f['resource_url']}"
-            st.markdown(f"- {mark} [{f['title'] or f['url']}]({f['url']}) · {tag} · {detail}")
+            st.markdown(f"- {mark} [{md(f['title'] or f['url'])}]({f['url']}) · {tag} · {md(detail)}")
+        show_dataset_trace(trace)
         cands = trace.get("candidates", {})
         if cands:
             st.markdown(f"**Candidate funnel ({len(cands)})**")
