@@ -1,0 +1,135 @@
+name: Sync government data
+
+# Downloads COMPLETE official data.gov.il datasets, validates them and commits versioned snapshots
+# (data/government/). Government requests are read-only GETs. A failed or incomplete download never
+# replaces the last complete snapshot. Snapshots too large for git are published as Release assets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Download every resource even if official metadata is unchanged"
+        type: boolean
+        default: false
+      only:
+        description: "Space-separated resource keys (empty = all)"
+        type: string
+        default: ""
+  schedule:
+    - cron: "23 2 * * *" # daily, 02:23 UTC
+  workflow_call:
+    inputs:
+      force:
+        type: boolean
+        default: false
+      only:
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # One sync at a time per branch; never cancel a running sync half way.
+    concurrency:
+      group: sync-government-data-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # commit snapshots + manifest; publish oversized snapshots as release assets
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out the branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install sync dependencies
+        run: python -m pip install --disable-pip-version-check "requests>=2.31" "openpyxl>=3.1"
+
+      - name: Download and validate official datasets
+        id: sync
+        timeout-minutes: 100
+        env:
+          FORCE: ${{ inputs.force && '--force' || '' }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set +e
+          args="$FORCE"
+          if [ -n "$ONLY" ]; then args="$args --only $ONLY"; fi
+          python scripts/sync_government_data.py $args 2>&1 | tee sync.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "sync exit code: $code"
+          # 0 = all ok, 2 = some resources failed (others still committed), 1 = manifest problem
+          if [ "$code" = "1" ]; then exit 1; fi
+          exit 0
+
+      - name: Publish oversized snapshots as release assets
+        if: steps.sync.outputs.exit_code != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'EOF' > release_assets.tsv
+          import json, pathlib
+          m = json.loads(pathlib.Path("data/government/manifest.json").read_text("utf-8"))
+          for key, e in m["resources"].items():
+              cur = e.get("current") or {}
+              rel = cur.get("release")
+              if cur.get("storage") == "release" and rel and pathlib.Path("release-staging", rel["asset_name"]).exists():
+                  print(f"{rel['tag']}\t{rel['asset_name']}\t{key}\t{cur['row_count']}\t{cur['file_sha256']}")
+          EOF
+          while IFS=$'\t' read -r tag asset key rows sha; do
+            [ -z "$tag" ] && continue
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "release $tag already exists"; continue
+            fi
+            gh release create "$tag" "release-staging/$asset" --target "$GITHUB_SHA" --latest=false \
+              --title "Government data snapshot: $key ($tag)" \
+              --notes "Complete validated snapshot of data.gov.il resource '$key': $rows rows, sha256 $sha. See data/government/manifest.json."
+          done < release_assets.tsv
+
+      - name: Verify manifest and snapshot files
+        if: steps.sync.outputs.exit_code != '1'
+        run: python scripts/sync_government_data.py --verify
+
+      - name: Commit validated snapshots
+        if: steps.sync.outputs.exit_code != '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data/government
+          if git diff --cached --quiet; then
+            echo "No snapshot changes to commit."; exit 0
+          fi
+          git commit -q -m "Sync government data snapshots (run ${GITHUB_RUN_ID})"
+          for i in 1 2 3 4; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then exit 0; fi
+            sleep $((2 ** i))
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+          done
+          echo "push failed"; exit 1
+
+      - name: Upload sync log and manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: government-data-sync-${{ github.run_id }}
+          path: |
+            sync.log
+            data/government/manifest.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Fail if any resource failed
+        if: steps.sync.outputs.exit_code != '0'
+        run: |
+          echo "::error::One or more resources failed; their last complete snapshots were kept. See sync.log."
+          exit 1
