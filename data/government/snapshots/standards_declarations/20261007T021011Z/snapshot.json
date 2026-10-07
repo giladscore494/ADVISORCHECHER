@@ -1,0 +1,93 @@
+{
+  "format_version": 1,
+  "key": "standards_declarations",
+  "version": "20261007T021011Z",
+  "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
+  "resource_name": "אכרזת תקנים ברשומות",
+  "resource_description": "",
+  "resource_format": "CSV",
+  "resource_created": "2023-03-06T05:57:15.258515",
+  "resource_last_modified": "2026-09-24T11:59:02.434380",
+  "resource_metadata_modified": "2026-09-24T11:59:40.352742",
+  "resource_size": 636937,
+  "resource_hash": "174fe1c3b8f6f2360070a084f7cf1960",
+  "download_url": "https://e.data.gov.il/dataset/dda8f0aa-8901-473d-a4d6-8b361aa51417/resource/d8611d0e-f5c8-4552-8615-da37e920f07b/download/d8611d0e-f5c8-4552-8615-da37e920f07b.csv",
+  "datastore_active": true,
+  "dataset_id": "dda8f0aa-8901-473d-a4d6-8b361aa51417",
+  "dataset_name": "mandatory-standards",
+  "dataset_title": "מאגר תקנים רשמיים",
+  "publisher": "משרד הכלכלה והתעשייה",
+  "license_id": "other-open",
+  "license_title": "אחר (פתוח)",
+  "license_url": "",
+  "dataset_metadata_modified": "2026-10-06T17:59:11.269218",
+  "source_url": "https://data.gov.il/dataset/mandatory-standards/resource/d8611d0e-f5c8-4552-8615-da37e920f07b",
+  "metadata_api_url": "https://data.gov.il/api/3/action/resource_show?id=d8611d0e-f5c8-4552-8615-da37e920f07b",
+  "retrieved_at": "2026-10-07T02:10:11Z",
+  "retrieval_method": "datastore_search",
+  "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d8611d0e-f5c8-4552-8615-da37e920f07b",
+  "pages": 1,
+  "fields": [
+    {
+      "id": "_id",
+      "type": "int"
+    },
+    {
+      "id": "publication",
+      "type": "text"
+    },
+    {
+      "id": "date",
+      "type": "timestamp"
+    },
+    {
+      "id": "title",
+      "type": "text"
+    },
+    {
+      "id": "summary_full",
+      "type": "text"
+    },
+    {
+      "id": "summary",
+      "type": "text"
+    },
+    {
+      "id": "standards",
+      "type": "text"
+    },
+    {
+      "id": "gen_info",
+      "type": "text"
+    },
+    {
+      "id": "file",
+      "type": "text"
+    }
+  ],
+  "row_count": 686,
+  "validation": {
+    "row_count": 686,
+    "expected_total": 686,
+    "count_matches_total": true,
+    "unique_ids": true,
+    "duplicate_ids": 0,
+    "id_field": "_id",
+    "ids_contiguous_1_to_n": true,
+    "schema_consistent": true,
+    "column_count": 9,
+    "previous_row_count": null
+  },
+  "notes": [],
+  "records_sha256": "7b0b5cf5d5364fa5150114c9b6b773655ecdd1fe64c2409cda8dc8e01d5fd71c",
+  "uncompressed_bytes": 784844,
+  "file_name": "records.jsonl.gz",
+  "file_sha256": "f6ac4f579367dec52d939eeb67a159ec051ddd158ff90794756aaed77f344dbe",
+  "file_bytes": 38563,
+  "encoding": "utf-8",
+  "compression": "gzip",
+  "record_format": "jsonl (one JSON object per line, values exactly as served by the official API)",
+  "metadata_fingerprint": "d2b9c0c52e68d49ccafb38729131419de9d55a66077625e85e7b642ee5250606",
+  "storage": "repo",
+  "path": "snapshots/standards_declarations/20261007T021011Z/records.jsonl.gz"
+}

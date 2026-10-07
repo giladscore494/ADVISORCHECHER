@@ -9,7 +9,12 @@ import streamlit as st
 
 import agent
 import llm
+import local_data
+import partial_report
+import research_runner
+import research_store
 from config import get_int, get_setting
+from models import ResearchResult
 
 DISCLAIMER = (
     "This tool performs preliminary research and does not provide legal advice. Any opportunity involving "
@@ -29,6 +34,8 @@ VERIFICATION_LABELS = {
 EVENT_ICONS = {"search": "🔎", "fetch": "📄", "error": "⚠️", "candidates": "🧪", "done": "✅",
                "dataset": "🗂️", "rejected": "⛔"}
 READ_STATUS_ICONS = {"ok": "✅", "rejected": "⛔", "no_matching_records": "∅", "failed": "❌"}
+FRESHNESS_ICONS = {"fresh": "🟢", "aging": "🟡", "stale": "🔴", "missing": "⚪"}
+STATUS_ICONS = {"running": "⏳", "completed": "✅", "failed": "❌", "interrupted": "⚠️"}
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~])")
 
 
@@ -43,8 +50,64 @@ st.warning(DISCLAIMER)
 # Let each text field and paragraph pick its own direction (Hebrew RTL, English LTR).
 st.markdown("<style>textarea, input[type=text] {unicode-bidi: plaintext;}</style>", unsafe_allow_html=True)
 
+local_data.warm_up()
+
+
+def get_store():
+    try:
+        return research_store.get_store()
+    except research_store.StoreError as exc:
+        st.error(f"Research store unavailable: {exc}")
+        return None
+
+
+def run_mode() -> str:
+    return (get_setting("RESEARCH_RUN_MODE", "background") or "background").lower()
+
+
+# ------------------------------------------------------ government data
+def show_snapshot_status() -> None:
+    try:
+        status = local_data.get_default().status()
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"Local government datasets unavailable: {md(exc)}")
+        return
+    datasets = status["datasets"]
+    available = [d for d in datasets if d["available"]]
+    if not available:
+        st.caption("No local government dataset snapshots found; the agent will use the live data.gov.il API only.")
+        return
+    worst = max(available, key=lambda d: d["age_days"] if d["age_days"] is not None else 1e9)
+    icon = FRESHNESS_ICONS.get(worst["freshness"], "•")
+    with st.expander(f"{icon} Local official datasets: {len(available)} validated snapshots · oldest verified "
+                     f"{worst['last_verified_at'] or 'n/a'} ({worst['freshness']})"):
+        st.caption("Complete validated snapshots of data.gov.il resources, synchronized by GitHub Actions. "
+                   "They are factual dataset evidence, not legally binding text. " + status["freshness_policy"] + ".")
+        st.dataframe([{
+            "dataset": d["label"], "rows": d["row_count"], "snapshot": d["retrieved_at"],
+            "last verified": d["last_verified_at"], "age (days)": d["age_days"],
+            "freshness": f"{FRESHNESS_ICONS.get(d['freshness'], '')} {d['freshness']}",
+            "last sync": f"{d['last_attempt_status']} {d['last_attempt_at']}", "resource id": d["resource_id"],
+        } for d in datasets], hide_index=True, use_container_width=True)
+        run_url = (status.get("last_run") or {}).get("github_run_url")
+        if run_url:
+            st.caption(f"Last synchronization run: {run_url}")
+
+
+show_snapshot_status()
+
 # ------------------------------------------------------------------ inputs
-missing = [k for k in (llm.api_key_env_name(), "SERPER_API_KEY") if not get_setting(k)]
+providers = list(llm.PROVIDERS)
+default_provider = llm.provider_name() if llm.provider_name() in providers else providers[0]
+provider = st.selectbox(
+    "Model provider", providers, index=providers.index(default_provider),
+    format_func=lambda p: f"{llm.PROVIDER_LABELS.get(p, p)} · {llm.provider_model(p)}"
+    + ("" if get_setting(llm.api_key_env_name(p)) else " (API key not configured)"),
+    help="API keys are read server-side from the environment, .env or Streamlit secrets; they are never shown "
+         "or stored with research data. All providers use the same tools (Serper search, fetch_url, data.gov.il, "
+         "local datasets).",
+)
+missing = [k for k in (llm.api_key_env_name(provider), "SERPER_API_KEY") if not get_setting(k)]
 if missing:
     st.error(
         f"Missing configuration: {', '.join(missing)}. Set them as environment variables, in a `.env` file, "
@@ -76,7 +139,8 @@ start = st.button("Start Research", type="primary", disabled=bool(missing) or no
 
 
 # ---------------------------------------------------------------- research
-def run_research(domain: str, instructions: str, limits: agent.Limits) -> agent.RunResult:
+def run_inline(store, domain: str, instructions: str, limits: agent.Limits, provider: str) -> str:
+    """Synchronous mode (RESEARCH_RUN_MODE=inline): same durable checkpoints, progress shown in place."""
     status = st.status("Researching…", expanded=True)
     with status:
         phase_box = st.empty()
@@ -97,24 +161,28 @@ def run_research(domain: str, instructions: str, limits: agent.Limits) -> agent.
         log_box.markdown("\n".join(f"- {line}" for line in log_lines[-12:]))
         status.update(label=f"{e['phase']}: {e['message']}"[:120])
 
-    try:
-        client = llm.LLMClient()
-    except llm.LLMError as exc:
-        status.update(label="Configuration error", state="error")
-        return agent.RunResult(domain=domain, error=str(exc))
-
-    run = agent.ResearchAgent(client, limits=limits, on_event=on_event).run(domain, instructions)
-    run.trace["llm_warnings"] = list(client.warnings)
+    run_id, run = research_runner.start(store, domain, instructions, limits, provider, background=False,
+                                        llm_factory=lambda p: llm.LLMClient(p), on_event=on_event)
     status.update(label="Research complete" if not run.error else "Research ended with an error",
                   state="complete" if not run.error else "error", expanded=False)
-    return run
+    return run_id
 
 
 if start:
-    limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps), int(max_api_calls))
-    st.session_state["run"] = run_research(domain.strip(), instructions.strip(), limits)
-    st.session_state["run_at"] = time.strftime("%Y-%m-%d %H:%M")
-
+    store = get_store()
+    if store is not None:
+        limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps), int(max_api_calls))
+        try:
+            if run_mode() == "inline":
+                run_id = run_inline(store, domain.strip(), instructions.strip(), limits, provider)
+            else:
+                run_id, _ = research_runner.start(store, domain.strip(), instructions.strip(), limits, provider,
+                                                  llm_factory=lambda p: llm.LLMClient(p))
+        except research_store.StoreError as exc:
+            st.error(f"Could not start the run: the research store is unavailable ({md(exc)}).")
+        else:
+            st.session_state["run_id"] = run_id
+            st.query_params["run"] = run_id
 
 # ----------------------------------------------------------------- results
 def source_mark(s) -> str:
@@ -234,7 +302,7 @@ def show_dataset_trace(trace: dict) -> None:
 def show_trace(trace: dict) -> None:
     with st.expander("Research Trace"):
         st.caption(
-            f"Stop reason: {trace.get('stop_reason', 'n/a')} · Model calls: {len(trace.get('model_calls', []))} · "
+            f"Stop reason: {md(trace.get('stop_reason', 'n/a'))} · Model calls: {len(trace.get('model_calls', []))} · "
             f"Elapsed: {trace.get('elapsed_s', 0)}s"
         )
         st.markdown("**Custom research instructions**")
@@ -260,35 +328,186 @@ def show_trace(trace: dict) -> None:
                 detail += f" · resource: {f['resource_url']}"
             st.markdown(f"- {mark} [{md(f['title'] or f['url'])}]({f['url']}) · {tag} · {md(detail)}")
         show_dataset_trace(trace)
+        show_local_trace(trace)
+        show_findings(trace)
         cands = trace.get("candidates", {})
         if cands:
             st.markdown(f"**Candidate funnel ({len(cands)})**")
             st.dataframe(
                 [{"candidate": n, **c} for n, c in cands.items()], hide_index=True, use_container_width=True
             )
-        st.download_button(
-            "Download full trace (JSON)",
-            json.dumps(trace, ensure_ascii=False, indent=2),
-            file_name="research_trace.json",
-            mime="application/json",
-        )
+        tu = trace.get("token_usage") or {}
+        if tu.get("model_calls"):
+            st.caption(f"Tokens: {tu.get('prompt_tokens', 0)} input · {tu.get('completion_tokens', 0)} output · "
+                       f"{tu.get('model_calls', 0)} model calls")
+        for e in trace.get("api_errors", []):
+            st.markdown(f"- ❌ {md(e.get('source'))}: {md(e.get('error'))}")
 
 
-run: agent.RunResult | None = st.session_state.get("run")
-if run is not None:
+def show_local_trace(trace: dict) -> None:
+    queries = trace.get("local_queries", [])
+    if not queries:
+        return
+    st.markdown(f"**Local official dataset queries ({len(queries)})**")
+    for q in queries:
+        args = q.get("args", {})
+        what = md(f"{args.get('dataset', '')} {args.get('query', '') or args.get('record_id', '')}".strip())
+        detail = f"❌ {md(q['error'])}" if q.get("error") else (
+            f"{q.get('total_matches')} matches" + (f" · snapshot {', '.join(q.get('snapshot_versions') or [])}"
+                                                   if q.get("snapshot_versions") else ""))
+        st.markdown(f"- 🗄️ `{md(q['tool'])}` {what} · {detail}")
+
+
+def show_findings(trace: dict) -> None:
+    findings = trace.get("findings") or []
+    questions = trace.get("open_questions") or []
+    if findings:
+        st.markdown(f"**Recorded findings ({len(findings)})**")
+        for f in findings:
+            mark = "✅ VERIFIED" if f.get("verified") else "❌ UNVERIFIED"
+            st.markdown(f"- {mark}: {md(f['statement'])} ({f['source_url']})  \n  _{md(f.get('verification_note'))}_")
+    if questions:
+        st.markdown("**Open questions**")
+        bullet_list([md(q) for q in questions])
+
+
+def trace_download(record: dict) -> str:
+    state = record.get("state") or {}
+    trace = dict(state.get("trace") or {})
+    trace.pop("events", None)
+    doc = {"run_id": record["run_id"], "status": record["status"], "domain": record.get("domain"),
+           "config": record.get("config"), "last_checkpoint_at": record.get("last_checkpoint_at"),
+           "checkpoint_seq": record.get("checkpoint_seq"), "summary": record.get("summary"),
+           "findings": state.get("findings"), "open_questions": state.get("open_questions"),
+           "dataset_evidence_provenance": {k: {kk: vv for kk, vv in v.items() if kk != "evidence_text"}
+                                           for k, v in (state.get("dataset_evidence") or {}).items()},
+           "trace": trace, "events": (state.get("trace") or {}).get("events", [])}
+    return json.dumps(doc, ensure_ascii=False, indent=2, default=str)
+
+
+def show_run_header(record: dict) -> None:
+    summary = record.get("summary") or {}
+    icon = STATUS_ICONS.get(record["status"], "•")
+    st.markdown(f"**Run ID:** `{record['run_id']}` · **Status:** {icon} {record['status']}")
+    st.caption(f"Last successful checkpoint: {record.get('last_checkpoint_at') or 'n/a'} "
+               f"(#{record.get('checkpoint_seq', 0)}: {md(record.get('label') or '')}) · "
+               f"phase {agent.PHASES.get(record.get('phase') or '', record.get('phase') or '')}")
+    if summary:
+        c = st.columns(6)
+        c[0].metric("Steps", summary.get("step", 0))
+        c[1].metric("Searches", summary.get("searches", 0))
+        c[2].metric("Pages read", summary.get("fetches", 0))
+        c[3].metric("Local queries", summary.get("local_queries", 0))
+        c[4].metric("Candidates", summary.get("candidates", 0))
+        c[5].metric("Findings ✓", f"{summary.get('verified_findings', 0)}/{summary.get('findings', 0)}")
+
+
+def show_live(run_id: str) -> None:
+    store = get_store()
+    record = store.load(run_id, include_state=False) if store else None
+    if record is None:
+        return
+    show_run_header(record)
+    events = research_runner.live_events(run_id)
+    if events:
+        st.info(events[-1]["message"])
+        st.markdown("\n".join(f"- {EVENT_ICONS.get(e['kind'], '•')} {md(e['message'])}" for e in events[-12:]))
+    if record["status"] != "running":
+        st.rerun()
+
+
+def show_partial(record: dict) -> None:
+    report = research_runner.report_for(record)
+    if not report:
+        return
+    st.warning(partial_report.NOTICE)
+    c1, c2 = st.columns(2)
+    c1.download_button("Download partial report (Markdown)", partial_report.to_markdown(report),
+                       file_name=f"partial_report_{record['run_id']}.md", mime="text/markdown")
+    c2.download_button("Download partial report (JSON)", json.dumps(report, ensure_ascii=False, indent=2),
+                       file_name=f"partial_report_{record['run_id']}.json", mime="application/json")
+    with st.expander("Partial report preview", expanded=True):
+        st.markdown(partial_report.to_markdown(report))
+
+
+def show_run(run_id: str) -> None:
+    store = get_store()
+    if store is None:
+        return
+    try:
+        record = store.load(run_id)
+    except research_store.StoreError as exc:
+        st.error(f"Could not load run {md(run_id)}: {md(exc)}")
+        return
+    if record is None:
+        st.error(f"Run `{md(run_id)}` was not found in the research store.")
+        return
     st.divider()
-    st.subheader(f"Results: {run.domain}")
-    st.caption(f"Run at {st.session_state.get('run_at', '')}")
-    if run.error:
-        st.error(run.error)
-    elif run.result is not None:
-        if run.result.research_summary:
-            st.markdown(run.result.research_summary)
-        if not run.result.opportunities:
-            reason = run.result.no_opportunity_reason
+    st.subheader(f"Results: {record.get('domain') or ''}")
+    if record["status"] == "running":
+        st.fragment(show_live, run_every=3)(run_id)
+        return
+    show_run_header(record)
+    state = record.get("state") or {}
+    trace = dict(state.get("trace") or {})
+    trace.setdefault("custom_instructions", state.get("instructions", ""))
+    if record.get("error"):
+        st.error(record["error"])
+    if record["status"] == "completed" and record.get("final_report"):
+        result = ResearchResult.model_validate(record["final_report"])
+        if result.research_summary:
+            st.markdown(result.research_summary)
+        if not result.opportunities:
+            reason = result.no_opportunity_reason
             st.info(f"**{agent.NO_RESULT_MESSAGE}**" + (f"\n\n{reason}" if reason != agent.NO_RESULT_MESSAGE else ""))
-        for i, opp in enumerate(run.result.opportunities):
+        for i, opp in enumerate(result.opportunities):
             show_opportunity(opp, expanded=(i == 0))
-    if run.trace:
-        show_trace(run.trace)
-    st.caption(DISCLAIMER)
+    else:
+        if record["status"] == "interrupted":
+            st.error("This run was interrupted (server restart, timeout or crash) before it finished. "
+                     "Everything up to the last checkpoint was saved.")
+        show_partial(record)
+        if research_runner.can_resume(record):
+            if st.button("Resume research from last checkpoint", key=f"resume-{run_id}"):
+                try:
+                    if run_mode() == "inline":
+                        research_runner.resume(store, run_id, background=False, llm_factory=lambda p: llm.LLMClient(p))
+                    else:
+                        research_runner.resume(store, run_id, llm_factory=lambda p: llm.LLMClient(p))
+                except (research_runner.RunnerError, research_store.StoreError) as exc:
+                    st.error(str(exc))
+                st.rerun()
+    if trace:
+        show_trace(trace)
+    st.download_button("Download research trace (JSON)", trace_download(record),
+                       file_name=f"research_trace_{run_id}.json", mime="application/json", key=f"trace-{run_id}")
+
+
+def show_recovery() -> None:
+    store = get_store()
+    if store is None:
+        return
+    with st.expander("Recover previous run"):
+        st.caption(f"Research store: {store.describe()}.")
+        if not store.durable_across_redeploys:
+            st.caption("⚠️ Checkpoints survive app restarts on this disk, but not container replacement or redeploys "
+                       "(e.g. Streamlit Community Cloud). Set RESEARCH_STORE_URL to a PostgreSQL database for "
+                       "durable recovery.")
+        rid = st.text_input("Run ID", key="recover_run_id", placeholder="e.g. 20261007-120000-1a2b3c4d5e6f7a8b")
+        if st.button("Load run", disabled=not rid.strip()):
+            st.session_state["run_id"] = rid.strip()
+            st.query_params["run"] = rid.strip()
+            st.rerun()
+        if (get_setting("RESEARCH_LIST_RUNS", "0") or "0") == "1":
+            runs = store.list_runs(20)
+            if runs:
+                st.dataframe([{k: r[k] for k in ("run_id", "status", "domain", "created_at", "last_checkpoint_at")}
+                              for r in runs], hide_index=True, use_container_width=True)
+
+
+current = st.session_state.get("run_id") or st.query_params.get("run")
+if current:
+    st.session_state["run_id"] = current
+    show_run(current)
+show_recovery()
+st.caption(DISCLAIMER)

@@ -15,3 +15,15 @@ def _deterministic_network(monkeypatch, request):
     fetcher._robots_cache.clear()
     if "robots" not in request.keywords:
         monkeypatch.setattr(fetcher, "robots_allowed", lambda url, session: True)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_research_store(monkeypatch, tmp_path):
+    """Every test gets its own durable SQLite research store; the local index is not pre-warmed."""
+    import research_store
+
+    monkeypatch.setenv("RESEARCH_STORE_URL", f"sqlite:///{tmp_path / 'runs.sqlite'}")
+    monkeypatch.setenv("GOVDATA_WARMUP", "0")
+    research_store.reset_default_store()
+    yield
+    research_store.reset_default_store()

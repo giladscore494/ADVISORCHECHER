@@ -1,0 +1,165 @@
+{
+  "format_version": 1,
+  "key": "mandatory_standards",
+  "version": "20261007T021001Z",
+  "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
+  "resource_name": "מאגר תקנים רשמיים",
+  "resource_description": "",
+  "resource_format": "CSV",
+  "resource_created": "2020-10-06T09:22:55.361064",
+  "resource_last_modified": "2026-10-06T17:59:03.393975",
+  "resource_metadata_modified": "2026-10-06T17:59:03.435302",
+  "resource_size": 1893432,
+  "resource_hash": "eef8b9211caee5a4fdcf9c518a6eee92",
+  "download_url": "https://e.data.gov.il/dataset/dda8f0aa-8901-473d-a4d6-8b361aa51417/resource/1a4d94e2-369a-488d-a223-eb1020612fbd/download/1a4d94e2-369a-488d-a223-eb1020612fbd.csv",
+  "datastore_active": true,
+  "dataset_id": "dda8f0aa-8901-473d-a4d6-8b361aa51417",
+  "dataset_name": "mandatory-standards",
+  "dataset_title": "מאגר תקנים רשמיים",
+  "publisher": "משרד הכלכלה והתעשייה",
+  "license_id": "other-open",
+  "license_title": "אחר (פתוח)",
+  "license_url": "",
+  "dataset_metadata_modified": "2026-10-06T17:59:11.269218",
+  "source_url": "https://data.gov.il/dataset/mandatory-standards/resource/1a4d94e2-369a-488d-a223-eb1020612fbd",
+  "metadata_api_url": "https://data.gov.il/api/3/action/resource_show?id=1a4d94e2-369a-488d-a223-eb1020612fbd",
+  "retrieved_at": "2026-10-07T02:10:01Z",
+  "retrieval_method": "datastore_search",
+  "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=1a4d94e2-369a-488d-a223-eb1020612fbd",
+  "pages": 1,
+  "fields": [
+    {
+      "id": "_id",
+      "type": "int"
+    },
+    {
+      "id": "index",
+      "type": "text"
+    },
+    {
+      "id": "standard_number",
+      "type": "text"
+    },
+    {
+      "id": "standard_name",
+      "type": "text"
+    },
+    {
+      "id": "standard_number_and_name",
+      "type": "text"
+    },
+    {
+      "id": "standard_edition",
+      "type": "text"
+    },
+    {
+      "id": "validity_from",
+      "type": "text"
+    },
+    {
+      "id": "validity_to",
+      "type": "text"
+    },
+    {
+      "id": "amendments",
+      "type": "text"
+    },
+    {
+      "id": "mandatory_sections",
+      "type": "text"
+    },
+    {
+      "id": "note",
+      "type": "text"
+    },
+    {
+      "id": "standard_process",
+      "type": "text"
+    },
+    {
+      "id": "standard_originality",
+      "type": "text"
+    },
+    {
+      "id": "standard_import_groups",
+      "type": "text"
+    },
+    {
+      "id": "standard_import_conditions",
+      "type": "text"
+    },
+    {
+      "id": "is_standard_mandatory",
+      "type": "text"
+    },
+    {
+      "id": "is_in_cassis",
+      "type": "text"
+    },
+    {
+      "id": "standard_number_en",
+      "type": "text"
+    },
+    {
+      "id": "standard_name_en",
+      "type": "text"
+    },
+    {
+      "id": "standard_edition_en",
+      "type": "text"
+    },
+    {
+      "id": "validity_from_en",
+      "type": "text"
+    },
+    {
+      "id": "validity_to_en",
+      "type": "text"
+    },
+    {
+      "id": "amendments_en",
+      "type": "text"
+    },
+    {
+      "id": "mandatory_sections_en",
+      "type": "text"
+    },
+    {
+      "id": "adoption_conditions_united",
+      "type": "text"
+    },
+    {
+      "id": "is_in_international_regulations",
+      "type": "text"
+    },
+    {
+      "id": "is_in_international_regulations_or_in_cassis",
+      "type": "text"
+    }
+  ],
+  "row_count": 551,
+  "validation": {
+    "row_count": 551,
+    "expected_total": 551,
+    "count_matches_total": true,
+    "unique_ids": true,
+    "duplicate_ids": 0,
+    "id_field": "_id",
+    "ids_contiguous_1_to_n": true,
+    "schema_consistent": true,
+    "column_count": 27,
+    "previous_row_count": null
+  },
+  "notes": [],
+  "records_sha256": "c96c29edcf39b913533ea3da94b5dbe062908033e9b00dc907424ae2cc14568a",
+  "uncompressed_bytes": 2199404,
+  "file_name": "records.jsonl.gz",
+  "file_sha256": "9858d7d83e039d56e5b4dfb44064e8c5dcfe3d35386a6a785e79bec3cfeeeaf2",
+  "file_bytes": 149673,
+  "encoding": "utf-8",
+  "compression": "gzip",
+  "record_format": "jsonl (one JSON object per line, values exactly as served by the official API)",
+  "metadata_fingerprint": "f4df6092e35cef0519339712c4e898a2058f5aaa059139cfb7b18b37cbb6eff4",
+  "storage": "repo",
+  "path": "snapshots/mandatory_standards/20261007T021001Z/records.jsonl.gz"
+}

@@ -1,0 +1,230 @@
+{
+  "format_version": 1,
+  "resources": {
+    "customs_tariff": {
+      "resource_id": "5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+      "label": "Customs tariff & purchase tax book (ספר סיווג טובין ביבוא - תעריף המכס ומס קניה)",
+      "current": {
+        "version": "20261007T020940Z",
+        "retrieved_at": "2026-10-07T02:09:40Z",
+        "row_count": 13173,
+        "records_sha256": "2b47b3980b982576295d50444cb00360cb278f88411f099e835b18b65f8ff229",
+        "file_sha256": "51770119ff35674dcc359b88dcd0d547a1705794e8b877504db0a328725adf8b",
+        "file_bytes": 466458,
+        "uncompressed_bytes": 9333565,
+        "storage": "repo",
+        "path": "snapshots/customs_tariff/20261007T020940Z/records.jsonl.gz",
+        "retrieval_method": "datastore_search",
+        "dataset_title": "ספר סיווג טובין ביבוא - Israel Customs Book for import",
+        "dataset_id": "3de0e7f0-03e1-4665-b078-da6e87543ed7",
+        "resource_name": "ספר סיווג טובין ביבוא - תעריף המכס ומס קניה - עברית",
+        "publisher": "רשות המסים בישראל",
+        "license_title": "אחר (פתוח)",
+        "license_url": "",
+        "source_url": "https://data.gov.il/dataset/customsbook/resource/5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+        "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+        "resource_last_modified": "2026-10-07T02:02:25.598279",
+        "dataset_metadata_modified": "2026-10-07T02:02:25.630522",
+        "metadata_fingerprint": "abd9b7c5daab53d3f1103c733ebbf76cd9a57661aa9e2e285f7f34400d933a4e",
+        "snapshot_json": "snapshots/customs_tariff/20261007T020940Z/snapshot.json",
+        "verified_at": "2026-10-07T02:09:40Z",
+        "checked_at": "2026-10-07T02:35:52Z"
+      },
+      "versions": [
+        "20261007T020940Z"
+      ],
+      "last_attempt": {
+        "at": "2026-10-07T02:35:52Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 3.0,
+        "requests": 3
+      },
+      "last_success_at": "2026-10-07T02:35:52Z"
+    },
+    "free_import_order": {
+      "resource_id": "a36db570-09f2-4521-8e3d-0290eb839c68",
+      "label": "Legal requirements - Free Import Order (דרישות חוקיות - צו יבוא חופשי)",
+      "current": {
+        "version": "20261007T020948Z",
+        "retrieved_at": "2026-10-07T02:09:48Z",
+        "row_count": 28949,
+        "records_sha256": "ae2200dbb23abd32f1f633adcfd7e85498170075dff0c9a81dee0ed732bae22c",
+        "file_sha256": "7a409ba5283c7daeb644437eb745990d5a0af4489969621df4fb0b65e1a4f463",
+        "file_bytes": 1828768,
+        "uncompressed_bytes": 41027036,
+        "storage": "repo",
+        "path": "snapshots/free_import_order/20261007T020948Z/records.jsonl.gz",
+        "retrieval_method": "datastore_search",
+        "dataset_title": "דרישות חוקיות - יבוא ויצוא טובין",
+        "dataset_id": "15fd7d7f-da3a-461e-94dd-1dfbbec52a22",
+        "resource_name": "דרישות חוקיות - צו יבוא חופשי",
+        "publisher": "רשות המסים בישראל",
+        "license_title": "Other (Open)",
+        "license_url": "",
+        "source_url": "https://data.gov.il/dataset/regularityrequirement/resource/a36db570-09f2-4521-8e3d-0290eb839c68",
+        "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=a36db570-09f2-4521-8e3d-0290eb839c68",
+        "resource_last_modified": "2026-10-01T02:03:50.060522",
+        "dataset_metadata_modified": "2026-10-01T02:04:40.023602",
+        "metadata_fingerprint": "af095a8b8115b58c86adb2cee6de2ded8df7ae96a34ce7268961627ff2333f80",
+        "snapshot_json": "snapshots/free_import_order/20261007T020948Z/snapshot.json",
+        "verified_at": "2026-10-07T02:09:48Z",
+        "checked_at": "2026-10-07T02:35:55Z"
+      },
+      "versions": [
+        "20261007T020948Z"
+      ],
+      "last_attempt": {
+        "at": "2026-10-07T02:35:55Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 2.4,
+        "requests": 3
+      },
+      "last_success_at": "2026-10-07T02:35:55Z"
+    },
+    "mandatory_standards": {
+      "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
+      "label": "Official standards registry (מאגר תקנים רשמיים)",
+      "current": {
+        "version": "20261007T021001Z",
+        "retrieved_at": "2026-10-07T02:10:01Z",
+        "row_count": 551,
+        "records_sha256": "c96c29edcf39b913533ea3da94b5dbe062908033e9b00dc907424ae2cc14568a",
+        "file_sha256": "9858d7d83e039d56e5b4dfb44064e8c5dcfe3d35386a6a785e79bec3cfeeeaf2",
+        "file_bytes": 149673,
+        "uncompressed_bytes": 2199404,
+        "storage": "repo",
+        "path": "snapshots/mandatory_standards/20261007T021001Z/records.jsonl.gz",
+        "retrieval_method": "datastore_search",
+        "dataset_title": "מאגר תקנים רשמיים",
+        "dataset_id": "dda8f0aa-8901-473d-a4d6-8b361aa51417",
+        "resource_name": "מאגר תקנים רשמיים",
+        "publisher": "משרד הכלכלה והתעשייה",
+        "license_title": "אחר (פתוח)",
+        "license_url": "",
+        "source_url": "https://data.gov.il/dataset/mandatory-standards/resource/1a4d94e2-369a-488d-a223-eb1020612fbd",
+        "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=1a4d94e2-369a-488d-a223-eb1020612fbd",
+        "resource_last_modified": "2026-10-06T17:59:03.393975",
+        "dataset_metadata_modified": "2026-10-06T17:59:11.269218",
+        "metadata_fingerprint": "f4df6092e35cef0519339712c4e898a2058f5aaa059139cfb7b18b37cbb6eff4",
+        "snapshot_json": "snapshots/mandatory_standards/20261007T021001Z/snapshot.json",
+        "verified_at": "2026-10-07T02:10:01Z",
+        "checked_at": "2026-10-07T02:35:58Z"
+      },
+      "versions": [
+        "20261007T021001Z"
+      ],
+      "last_attempt": {
+        "at": "2026-10-07T02:35:58Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 2.9,
+        "requests": 3
+      },
+      "last_success_at": "2026-10-07T02:35:58Z"
+    },
+    "import_regulations": {
+      "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+      "label": "Legal requirements - additional orders (דרישות חוקיות - צוים נוספים)",
+      "current": {
+        "version": "20261007T021006Z",
+        "retrieved_at": "2026-10-07T02:10:06Z",
+        "row_count": 3460,
+        "records_sha256": "5b757cf9c2ffb8b579b41e4c6639c079e9687eaeb880e678c6b733c2fff17705",
+        "file_sha256": "2cc4434c48ce4b734a34e9cce8e8840c571078db4e708a6eda43f6d18375fd1e",
+        "file_bytes": 415675,
+        "uncompressed_bytes": 5237172,
+        "storage": "repo",
+        "path": "snapshots/import_regulations/20261007T021006Z/records.jsonl.gz",
+        "retrieval_method": "datastore_search",
+        "dataset_title": "דרישות חוקיות - יבוא ויצוא טובין",
+        "dataset_id": "15fd7d7f-da3a-461e-94dd-1dfbbec52a22",
+        "resource_name": "דרישות חוקיות - צוים נוספים",
+        "publisher": "רשות המסים בישראל",
+        "license_title": "Other (Open)",
+        "license_url": "",
+        "source_url": "https://data.gov.il/dataset/regularityrequirement/resource/d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+        "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+        "resource_last_modified": "2026-10-01T02:03:55.004773",
+        "dataset_metadata_modified": "2026-10-01T02:04:40.023602",
+        "metadata_fingerprint": "f5986257fc06da53cc925d7ef01ed1b9b459630656ef266661613e8dbb4bf37a",
+        "snapshot_json": "snapshots/import_regulations/20261007T021006Z/snapshot.json",
+        "verified_at": "2026-10-07T02:10:06Z",
+        "checked_at": "2026-10-07T02:36:00Z"
+      },
+      "versions": [
+        "20261007T021006Z"
+      ],
+      "last_attempt": {
+        "at": "2026-10-07T02:36:00Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 3.0,
+        "requests": 3
+      },
+      "last_success_at": "2026-10-07T02:36:00Z"
+    },
+    "standards_declarations": {
+      "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
+      "label": "Official standards declarations in Reshumot (אכרזת תקנים ברשומות)",
+      "current": {
+        "version": "20261007T021011Z",
+        "retrieved_at": "2026-10-07T02:10:11Z",
+        "row_count": 686,
+        "records_sha256": "7b0b5cf5d5364fa5150114c9b6b773655ecdd1fe64c2409cda8dc8e01d5fd71c",
+        "file_sha256": "f6ac4f579367dec52d939eeb67a159ec051ddd158ff90794756aaed77f344dbe",
+        "file_bytes": 38563,
+        "uncompressed_bytes": 784844,
+        "storage": "repo",
+        "path": "snapshots/standards_declarations/20261007T021011Z/records.jsonl.gz",
+        "retrieval_method": "datastore_search",
+        "dataset_title": "מאגר תקנים רשמיים",
+        "dataset_id": "dda8f0aa-8901-473d-a4d6-8b361aa51417",
+        "resource_name": "אכרזת תקנים ברשומות",
+        "publisher": "משרד הכלכלה והתעשייה",
+        "license_title": "אחר (פתוח)",
+        "license_url": "",
+        "source_url": "https://data.gov.il/dataset/mandatory-standards/resource/d8611d0e-f5c8-4552-8615-da37e920f07b",
+        "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d8611d0e-f5c8-4552-8615-da37e920f07b",
+        "resource_last_modified": "2026-09-24T11:59:02.434380",
+        "dataset_metadata_modified": "2026-10-06T17:59:11.269218",
+        "metadata_fingerprint": "d2b9c0c52e68d49ccafb38729131419de9d55a66077625e85e7b642ee5250606",
+        "snapshot_json": "snapshots/standards_declarations/20261007T021011Z/snapshot.json",
+        "verified_at": "2026-10-07T02:10:11Z",
+        "checked_at": "2026-10-07T02:36:03Z"
+      },
+      "versions": [
+        "20261007T021011Z"
+      ],
+      "last_attempt": {
+        "at": "2026-10-07T02:36:03Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 3.0,
+        "requests": 3
+      },
+      "last_success_at": "2026-10-07T02:36:03Z"
+    }
+  },
+  "generated_at": "2026-10-07T02:36:06Z",
+  "source": {
+    "portal": "https://data.gov.il",
+    "api": "https://data.gov.il/api/3/action/",
+    "terms": "Data retrieved read-only from data.gov.il under each dataset's license."
+  },
+  "last_run": {
+    "started_at": "2026-10-07T02:35:52Z",
+    "finished_at": "2026-10-07T02:36:06Z",
+    "requests": 15,
+    "retries": 0,
+    "results": {
+      "customs_tariff": "unchanged",
+      "free_import_order": "unchanged",
+      "mandatory_standards": "unchanged",
+      "import_regulations": "unchanged",
+      "standards_declarations": "unchanged"
+    },
+    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/37562689004"
+  }
+}

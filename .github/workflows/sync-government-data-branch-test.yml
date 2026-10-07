@@ -1,0 +1,25 @@
+name: Sync government data (branch test)
+
+# workflow_dispatch only works once a workflow exists on the default branch. This branch-triggered
+# workflow runs the same reusable sync job when the sync code changes on a claude/* feature branch,
+# so the real read-only integration with data.gov.il is exercised (and its validated snapshots are
+# committed to that branch) before merge.
+
+on:
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - "scripts/sync_government_data.py"
+      - ".github/workflows/sync-government-data.yml"
+      - ".github/workflows/sync-government-data-branch-test.yml"
+
+permissions: {}
+
+jobs:
+  sync:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/sync-government-data.yml
+    with:
+      force: false
