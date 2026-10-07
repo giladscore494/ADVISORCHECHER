@@ -25,6 +25,11 @@ class SourceRef(BaseModel):
     url: str
     section: str = ""
     support: str = ""
+    # Set by the agent after the run (not by the model): was this URL retrieved and read in this run,
+    # and is it an official source? Any value the model supplies is overwritten.
+    verified: bool | None = None
+    official: bool | None = None
+    verification_note: str = ""
 
     @field_validator("url")
     @classmethod
@@ -72,6 +77,9 @@ class Opportunity(BaseModel):
     confidence: int = Field(ge=0, le=100)
     # Filled in by the agent after validation, not by the model.
     unread_primary_sources: list[str] = []
+    verification_status: Literal["verified", "partially_verified", "unverified"] = "unverified"
+    verification_notes: list[str] = []
+    downgraded_from: str = ""
 
 
 class ResearchResult(BaseModel):
@@ -92,6 +100,24 @@ def extract_json_object(text: str) -> str:
     return t[start : end + 1]
 
 
+AGENT_OPPORTUNITY_FIELDS = ("unread_primary_sources", "verification_status", "verification_notes", "downgraded_from")
+AGENT_SOURCE_FIELDS = ("verified", "official", "verification_note")
+
+
+def _drop_agent_fields(data: dict) -> None:
+    """Verification fields are computed by the agent; ignore anything the model put there."""
+    for opp in data.get("opportunities") or []:
+        if not isinstance(opp, dict):
+            continue
+        for key in AGENT_OPPORTUNITY_FIELDS:
+            opp.pop(key, None)
+        for list_key in ("primary_sources", "secondary_sources", "contradictory_sources_checked"):
+            for src in opp.get(list_key) or []:
+                if isinstance(src, dict):
+                    for key in AGENT_SOURCE_FIELDS:
+                        src.pop(key, None)
+
+
 def parse_research_result(text: str) -> ResearchResult:
     """Parse and validate the model's final JSON. Raises ValueError with a readable reason."""
     try:
@@ -100,6 +126,7 @@ def parse_research_result(text: str) -> ResearchResult:
         raise ValueError(f"Invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("Top-level JSON must be an object.")
+    _drop_agent_fields(data)
     try:
         return ResearchResult.model_validate(data)
     except ValidationError as exc:
@@ -107,7 +134,11 @@ def parse_research_result(text: str) -> ResearchResult:
 
 
 def rank_opportunities(opps: list[Opportunity], limit: int) -> list[Opportunity]:
-    """A before B before C, then by business_score and confidence."""
+    """A before B before C, then better-verified evidence, then business_score and confidence."""
     order = {"A": 0, "B": 1, "C": 2}
-    ranked = sorted(opps, key=lambda o: (order[o.classification], -o.business_score, -o.confidence))
+    verified = {"verified": 0, "partially_verified": 1, "unverified": 2}
+    ranked = sorted(
+        opps,
+        key=lambda o: (order[o.classification], verified[o.verification_status], -o.business_score, -o.confidence),
+    )
     return ranked[: max(0, limit)]

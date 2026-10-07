@@ -3,5 +3,6 @@ openai>=1.50
 requests>=2.31
 beautifulsoup4>=4.12
 pypdf>=4.0
+openpyxl>=3.1
 pydantic>=2.6
 python-dotenv>=1.0

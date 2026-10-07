@@ -20,6 +20,11 @@ CLASS_LABELS = {
     "B": "B: Plausible but ambiguous (professional review required)",
     "C": "C: Apparent unintended loophole (high regulatory-change risk)",
 }
+VERIFICATION_LABELS = {
+    "verified": "✅ Evidence verified",
+    "partially_verified": "⚠️ Partially verified",
+    "unverified": "❌ Unverified",
+}
 EVENT_ICONS = {"search": "🔎", "fetch": "📄", "error": "⚠️", "candidates": "🧪", "done": "✅"}
 
 st.set_page_config(page_title="Regulatory Opportunity Hunter", page_icon="🔎", layout="wide")
@@ -102,14 +107,25 @@ if start:
 
 
 # ----------------------------------------------------------------- results
+def source_mark(s) -> str:
+    """✅ official and read, ☑️ read but not official, ❌ not retrieved."""
+    if s.verified is None:
+        return ""
+    if not s.verified:
+        return "❌ "
+    return "✅ " if s.official else "☑️ "
+
+
 def source_links(sources) -> None:
     for s in sources:
         label = s.title or s.url
-        line = f"- [{label}]({s.url})"
+        line = f"- {source_mark(s)}[{label}]({s.url})"
         if s.section:
             line += f" (§ {s.section})"
         if s.support:
             line += f": {s.support}"
+        if s.verification_note and not (s.verified and s.official):
+            line += f"  \n  _{s.verification_note}_"
         st.markdown(line)
 
 
@@ -118,11 +134,17 @@ def bullet_list(items: list[str]) -> None:
 
 
 def show_opportunity(opp, expanded: bool) -> None:
-    header = f"{opp.name}  ·  Score {opp.business_score}/100  ·  Class {opp.classification}  ·  Confidence {opp.confidence}%"
+    header = (f"{opp.name}  ·  Score {opp.business_score}/100  ·  Class {opp.classification}  ·  "
+              f"Confidence {opp.confidence}%  ·  {VERIFICATION_LABELS[opp.verification_status]}")
     with st.expander(header, expanded=expanded):
         st.markdown(f"**{CLASS_LABELS[opp.classification]}**")
-        if opp.unread_primary_sources:
-            st.warning("Some cited primary sources were not successfully read during this run. Verify them manually.")
+        if opp.verification_status == "verified":
+            st.success("Official evidence verified: every cited primary source was retrieved and read in this run.")
+        else:
+            box = st.error if opp.verification_status == "unverified" else st.warning
+            title = ("Legal finding UNVERIFIED." if opp.verification_status == "unverified"
+                     else "Partially verified: some cited primary sources could not be retrieved or are not official.")
+            box("\n".join([f"**{title}** Verify manually before relying on it."] + [f"- {n}" for n in opp.verification_notes]))
         if opp.summary:
             st.markdown(opp.summary)
         st.markdown("#### Business thesis")
@@ -184,6 +206,8 @@ def show_trace(trace: dict) -> None:
             mark = "✅" if f["ok"] else "❌"
             tag = "primary" if f["primary"] else "secondary"
             detail = f"{f['source_type']}, {f['chars']} chars" if f["ok"] else f["error"]
+            if f.get("resource_url"):
+                detail += f" · resource: {f['resource_url']}"
             st.markdown(f"- {mark} [{f['title'] or f['url']}]({f['url']}) · {tag} · {detail}")
         cands = trace.get("candidates", {})
         if cands:
