@@ -1,0 +1,133 @@
+{
+  "format_version": 1,
+  "key": "customs_tariff",
+  "version": "20261007T020940Z",
+  "resource_id": "5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+  "resource_name": "ספר סיווג טובין ביבוא - תעריף המכס ומס קניה - עברית",
+  "resource_description": "",
+  "resource_format": "CSV",
+  "resource_created": "2023-07-11T12:44:54.745764",
+  "resource_last_modified": "2026-10-07T02:02:25.598279",
+  "resource_metadata_modified": "2026-10-07T02:02:25.641080",
+  "resource_size": 3282460,
+  "resource_hash": "538eb8e6322e55a7c5bbe6597f2dc09c",
+  "download_url": "https://e.data.gov.il/dataset/3de0e7f0-03e1-4665-b078-da6e87543ed7/resource/5536eaa1-2e51-406b-aff6-b9ca02801b7c/download/5536eaa1-2e51-406b-aff6-b9ca02801b7c.csv",
+  "datastore_active": true,
+  "dataset_id": "3de0e7f0-03e1-4665-b078-da6e87543ed7",
+  "dataset_name": "customsbook",
+  "dataset_title": "ספר סיווג טובין ביבוא - Israel Customs Book for import",
+  "publisher": "רשות המסים בישראל",
+  "license_id": "other-open",
+  "license_title": "אחר (פתוח)",
+  "license_url": "",
+  "dataset_metadata_modified": "2026-10-07T02:02:25.630522",
+  "source_url": "https://data.gov.il/dataset/customsbook/resource/5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+  "metadata_api_url": "https://data.gov.il/api/3/action/resource_show?id=5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+  "retrieved_at": "2026-10-07T02:09:40Z",
+  "retrieval_method": "datastore_search",
+  "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=5536eaa1-2e51-406b-aff6-b9ca02801b7c",
+  "pages": 3,
+  "fields": [
+    {
+      "id": "_id",
+      "type": "int"
+    },
+    {
+      "id": "CustomsBookTypeID",
+      "type": "numeric"
+    },
+    {
+      "id": "CustomsItem_2_Digits",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItem_4_Digits",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItem_6_Digits",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItemFullClassification",
+      "type": "text"
+    },
+    {
+      "id": "HierarchicLocation",
+      "type": "text"
+    },
+    {
+      "id": "GoodsDescription",
+      "type": "text"
+    },
+    {
+      "id": "FullGoodsDescription",
+      "type": "text"
+    },
+    {
+      "id": "MeasurementUnitID",
+      "type": "numeric"
+    },
+    {
+      "id": "MeasurementUnitDescription",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItemEndDate",
+      "type": "text"
+    },
+    {
+      "id": "CustomsTariff",
+      "type": "text"
+    },
+    {
+      "id": "CustomsTariffEndDate",
+      "type": "text"
+    },
+    {
+      "id": "PurchaseTaxTariff",
+      "type": "text"
+    },
+    {
+      "id": "PurchaseTaxTariffEndDate",
+      "type": "text"
+    },
+    {
+      "id": "PercentageCapAdditionTariff",
+      "type": "text"
+    },
+    {
+      "id": "MaslulMeasurementUnit",
+      "type": "numeric"
+    },
+    {
+      "id": "CustomsItemCategoryID",
+      "type": "numeric"
+    }
+  ],
+  "row_count": 13173,
+  "validation": {
+    "row_count": 13173,
+    "expected_total": 13173,
+    "count_matches_total": true,
+    "unique_ids": true,
+    "duplicate_ids": 0,
+    "id_field": "_id",
+    "ids_contiguous_1_to_n": true,
+    "schema_consistent": true,
+    "column_count": 19,
+    "previous_row_count": null
+  },
+  "notes": [],
+  "records_sha256": "2b47b3980b982576295d50444cb00360cb278f88411f099e835b18b65f8ff229",
+  "uncompressed_bytes": 9333565,
+  "file_name": "records.jsonl.gz",
+  "file_sha256": "51770119ff35674dcc359b88dcd0d547a1705794e8b877504db0a328725adf8b",
+  "file_bytes": 466458,
+  "encoding": "utf-8",
+  "compression": "gzip",
+  "record_format": "jsonl (one JSON object per line, values exactly as served by the official API)",
+  "metadata_fingerprint": "abd9b7c5daab53d3f1103c733ebbf76cd9a57661aa9e2e285f7f34400d933a4e",
+  "storage": "repo",
+  "path": "snapshots/customs_tariff/20261007T020940Z/records.jsonl.gz"
+}
