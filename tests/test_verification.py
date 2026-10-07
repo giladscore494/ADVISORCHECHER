@@ -4,7 +4,7 @@ import json
 
 from agent import Limits, ResearchAgent
 from fetcher import FetchResult
-from helpers import FakeLLM, text_response, tool_response, valid_report
+from helpers import EXCERPT, SOURCE_TEXT, FakeLLM, text_response, tool_response, valid_report
 
 BLOCKED = "https://www.gov.il/he/departments/legalInfo/trailer-regulations"
 ALT_PDF = "https://www.gov.il/BlobFolder/legalinfo/trailer-regulations/he/takanot.pdf"
@@ -21,7 +21,7 @@ def fetch_by_url(url):
                            text="CKAN resource metadata: ...", resource_url="https://data.gov.il/x/trailers.csv",
                            metadata={"format": "CSV"})
     return FetchResult(url=url, final_url=url, ok=True, source_type="pdf" if url.endswith(".pdf") else "html",
-                       title="doc", text="§4 ...")
+                       title="doc", text=SOURCE_TEXT)
 
 
 class SearchSpy:
@@ -53,7 +53,8 @@ def tool_results(llm):
 def report_citing(*urls, cls="A", extra=None):
     report = valid_report(urls[0], cls=cls)
     opp = report["opportunities"][0]
-    opp["primary_sources"] = [{"title": f"src {i}", "url": u, "section": "4", "support": "x"} for i, u in enumerate(urls)]
+    opp["primary_sources"] = [{"title": f"src {i}", "url": u, "section": "4", "support": "x", "excerpt": EXCERPT}
+                              for i, u in enumerate(urls)]
     opp.update(extra or {})
     return report
 
@@ -178,19 +179,37 @@ def test_403_on_non_official_site_gets_no_special_handling():
     assert "guidance" not in result and "alternative_search" not in result and search.queries == []
 
 
-def test_ckan_resource_url_passed_to_model_and_counts_as_verified():
+def test_ckan_resource_metadata_via_fetch_url_is_not_claim_evidence():
+    """resource_show returns metadata, not data: citing it cannot verify a claim or support Class A."""
     run, agent, llm, _ = run_agent([tool_response(("fetch_url", {"url": CKAN_RES}))], report_citing(CKAN_RES))
     result = tool_results(llm)[0]
     assert result["source_type"] == "ckan_resource"
     assert result["resource_url"] == "https://data.gov.il/x/trailers.csv" and result["metadata"] == {"format": "CSV"}
     assert run.trace["fetches"][0]["resource_url"] == "https://data.gov.il/x/trailers.csv"
-    assert run.result.opportunities[0].verification_status == "verified"
+    opp = run.result.opportunities[0]
+    src = opp.primary_sources[0]
+    assert src.kind == "dataset" and src.retrieval_status == "metadata_only" and not src.verified
+    assert "not the dataset contents" in src.verification_note
+    assert opp.verification_status == "unverified" and opp.classification == "B"
+
+
+def test_quoting_ckan_search_results_fetched_via_fetch_url_verifies_nothing():
+    search_url = "https://data.gov.il/api/3/action/package_search?q=trailers"
+
+    def fetch(url):
+        return FetchResult(url=url, final_url=url, ok=True, source_type="json", text=f'{{"title": "{EXCERPT}"}}')
+
+    llm = FakeLLM([tool_response(("fetch_url", {"url": search_url})), text_response("DONE"),
+                   text_response(json.dumps(report_citing(search_url)))])
+    run = ResearchAgent(llm, search_fn=SearchSpy(), fetch_fn=fetch).run("x")
+    src = run.result.opportunities[0].primary_sources[0]
+    assert src.retrieval_status == "metadata_only" and not src.verified
 
 
 def test_verified_ranks_above_unverified_within_class():
     report = valid_report(ALT_PDF, n=2, cls="B")
     report["opportunities"][0].update(business_score=95)
-    report["opportunities"][0]["primary_sources"] = [{"title": "blocked", "url": BLOCKED}]  # opps share one list
+    report["opportunities"][0]["primary_sources"] = [{"title": "blocked", "url": BLOCKED, "excerpt": EXCERPT}]
     report["opportunities"][1].update(business_score=60)
     run, *_ = run_agent(
         [tool_response(("fetch_url", {"url": BLOCKED}), ("fetch_url", {"url": ALT_PDF}))], report)

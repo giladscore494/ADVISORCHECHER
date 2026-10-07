@@ -6,12 +6,16 @@ import ipaddress
 import json
 import re
 import socket
+import time
 import zipfile
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
 
 import requests
 from bs4 import BeautifulSoup
+
+from evidence import strip_controls
 from pypdf import PdfReader
 
 USER_AGENT = (
@@ -27,6 +31,16 @@ MAX_TABLE_ROWS = 200  # rows rendered per CSV file / XLSX sheet
 MAX_XLSX_SHEETS = 5
 MAX_XLSX_UNCOMPRESSED = 100 * 1024 * 1024  # zip-bomb guard
 MAX_CELL_CHARS = 200
+
+# Transient-failure retries (429 / 5xx / connection errors) with exponential backoff and a strict cap.
+MAX_RETRIES = 2
+BACKOFF_BASE_S = 1.0
+MAX_BACKOFF_S = 10.0
+TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+ROBOTS_AGENT = "RegulatoryOpportunityHunter"
+MAX_ROBOTS_BYTES = 512 * 1024
+_sleep = time.sleep  # patched in tests
+_robots_cache: dict[str, RobotFileParser | None] = {}
 
 XLSX_TYPES = ("spreadsheetml", "ms-excel", "officedocument.spreadsheet")
 CKAN_RESOURCE_FIELDS = (
@@ -51,6 +65,9 @@ class FetchResult:
     # Downloadable file behind a CKAN resource (data.gov.il resource_show); fetch it to read the data.
     resource_url: str = ""
     metadata: dict = field(default_factory=dict)
+    attempts: int = 1
+    # True for 401/403 or robots.txt disallow: access is restricted and must not be bypassed.
+    access_restricted: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -140,7 +157,8 @@ def decode_text(data: bytes) -> str:
     return data.decode("latin-1", errors="replace")
 
 
-def extract_csv_text(data: bytes) -> str:
+def iter_csv_rows(data: bytes):
+    """Return (header, row_iterator) for CSV bytes. Rows are lists of strings; blank rows skipped."""
     text = decode_text(data)
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
@@ -148,10 +166,13 @@ def extract_csv_text(data: bytes) -> str:
         dialect = csv.excel
     reader = csv.reader(io.StringIO(text), dialect)
     header = next(reader, [])
+    return header, (row for row in reader if any(c.strip() for c in row))
+
+
+def extract_csv_text(data: bytes) -> str:
+    header, rows_iter = iter_csv_rows(data)
     rows, total = [], 0
-    for row in reader:
-        if not any(c.strip() for c in row):
-            continue
+    for row in rows_iter:
         total += 1
         if len(rows) < MAX_TABLE_ROWS:
             rows.append(row)
@@ -160,33 +181,43 @@ def extract_csv_text(data: bytes) -> str:
     return _render_rows(header, rows, total)
 
 
-def extract_xlsx_text(data: bytes) -> str:
+def open_xlsx(data: bytes):
+    """Open an XLSX workbook read-only after a zip-bomb check. Raises ValueError."""
     from openpyxl import load_workbook
 
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             if sum(i.file_size for i in zf.infolist()) > MAX_XLSX_UNCOMPRESSED:
                 raise ValueError("XLSX file is too large when uncompressed.")
-        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        return load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except zipfile.BadZipFile as exc:
         raise ValueError("Not a valid XLSX file (legacy .xls is not supported).") from exc
     except ValueError:
         raise
     except Exception as exc:
         raise ValueError(f"XLSX could not be parsed: {exc}") from exc
+
+
+def iter_xlsx_sheets(wb):
+    """Yield (sheet_title, header, row_iterator, total_or_None) for the first MAX_XLSX_SHEETS sheets."""
+    for ws in wb.worksheets[:MAX_XLSX_SHEETS]:
+        rows_iter = ws.iter_rows(values_only=True)
+        header = list(next(rows_iter, None) or [])
+        rows = (list(r) for r in rows_iter if any(c not in (None, "") for c in r))
+        yield ws.title, header, rows, (ws.max_row - 1) if ws.max_row else None
+
+
+def extract_xlsx_text(data: bytes) -> str:
+    wb = open_xlsx(data)
     parts = []
     try:
-        for ws in wb.worksheets[:MAX_XLSX_SHEETS]:
-            rows_iter = ws.iter_rows(values_only=True)
-            header = list(next(rows_iter, None) or [])
+        for title, header, rows_iter, total in iter_xlsx_sheets(wb):
             rows = []
             for row in rows_iter:
                 if len(rows) >= MAX_TABLE_ROWS:
                     break
-                if any(c not in (None, "") for c in row):
-                    rows.append(list(row))
-            total = (ws.max_row - 1) if ws.max_row else None
-            parts.append(f"[sheet: {ws.title}]\n" + _render_rows(header, rows, total))
+                rows.append(row)
+            parts.append(f"[sheet: {title}]\n" + _render_rows(header, rows, total))
         if len(wb.worksheets) > MAX_XLSX_SHEETS:
             parts.append(f"[{len(wb.worksheets) - MAX_XLSX_SHEETS} more sheets not shown]")
     finally:
@@ -195,6 +226,41 @@ def extract_xlsx_text(data: bytes) -> str:
     if not text:
         raise ValueError("XLSX contains no readable cells.")
     return text
+
+
+def json_records(doc) -> list[dict] | None:
+    """Find a list of records in common JSON layouts (list of objects, CKAN/GeoJSON wrappers)."""
+    if isinstance(doc, list) and doc and all(isinstance(r, dict) for r in doc[:20]):
+        return doc
+    if isinstance(doc, dict):
+        if isinstance(doc.get("features"), list):  # GeoJSON
+            return [f.get("properties") or {} for f in doc["features"] if isinstance(f, dict)]
+        for key in ("records", "result", "data", "items", "rows"):
+            value = doc.get(key)
+            if isinstance(value, dict):
+                nested = json_records(value)
+                if nested is not None:
+                    return nested
+            elif isinstance(value, list) and value and all(isinstance(r, dict) for r in value[:20]):
+                return value
+    return None
+
+
+def detect_kind(content_type: str, final_url: str, data: bytes) -> str:
+    """Classify a download as pdf | json | xlsx | csv | html."""
+    content_type = (content_type or "").lower()
+    path = urlparse(final_url).path.lower()
+    head = data.lstrip()[:1]
+    if "pdf" in content_type or data[:5] == b"%PDF-" or path.endswith(".pdf"):
+        return "pdf"
+    if "json" in content_type or (head in (b"{", b"[") and "html" not in content_type):
+        return "json"
+    # CSV downloads are often labelled application/vnd.ms-excel, so a .csv path wins.
+    if path.endswith((".xlsx", ".xlsm")) or (any(t in content_type for t in XLSX_TYPES) and not path.endswith(".csv")):
+        return "xlsx"
+    if "csv" in content_type or path.endswith(".csv"):
+        return "csv"
+    return "html"
 
 
 def _ckan_text(result) -> tuple[str, str, str, str, dict]:
@@ -240,20 +306,18 @@ def extract_json(data: bytes) -> tuple[str, str, str, str, dict]:
     return "json", "", json.dumps(doc, ensure_ascii=False, indent=1), "", {}
 
 
-def _download(url: str, session: requests.Session) -> tuple[requests.Response, bytes]:
+def _download(
+    url: str, session: requests.Session, max_bytes: int | None = None, headers: dict | None = None
+) -> tuple[requests.Response, bytes]:
     """GET with manual redirect handling (each hop is checked) and a size cap."""
+    max_bytes = max_bytes or MAX_DOWNLOAD_BYTES
     current = url
+    request_headers = {"User-Agent": USER_AGENT, "Accept-Language": "he,en;q=0.8", **(headers or {})}
     for _ in range(MAX_REDIRECTS + 1):
         problem = _check_url(current)
         if problem:
             raise ValueError(problem)
-        resp = session.get(
-            current,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "he,en;q=0.8"},
-            timeout=TIMEOUT,
-            stream=True,
-            allow_redirects=False,
-        )
+        resp = session.get(current, headers=request_headers, timeout=TIMEOUT, stream=True, allow_redirects=False)
         if resp.is_redirect and resp.headers.get("Location"):
             current = urljoin(current, resp.headers["Location"])
             resp.close()
@@ -261,42 +325,102 @@ def _download(url: str, session: requests.Session) -> tuple[requests.Response, b
         chunks, total = [], 0
         for chunk in resp.iter_content(64 * 1024):
             total += len(chunk)
-            if total > MAX_DOWNLOAD_BYTES:
+            if total > max_bytes:
                 resp.close()
-                raise ValueError(f"Download exceeds {MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB limit.")
+                raise ValueError(f"Download exceeds the {max_bytes:,}-byte size limit.")
             chunks.append(chunk)
         return resp, b"".join(chunks)
     raise ValueError("Too many redirects.")
 
 
-def fetch_url(url: str, max_chars: int = MAX_TEXT_CHARS, session: requests.Session | None = None) -> FetchResult:
+def _retry_delay(attempt: int, resp: requests.Response | None) -> float:
+    delay = BACKOFF_BASE_S * (2 ** attempt)
+    retry_after = resp.headers.get("Retry-After") if resp is not None else None
+    if retry_after and str(retry_after).strip().isdigit():
+        delay = max(delay, float(retry_after))
+    return min(delay, MAX_BACKOFF_S)
+
+
+def download_with_retries(
+    url: str,
+    session: requests.Session,
+    max_bytes: int | None = None,
+    headers: dict | None = None,
+    max_retries: int | None = None,
+) -> tuple[requests.Response, bytes, int]:
+    """_download plus retries for transient failures only (429, 5xx, connection errors/timeouts).
+    401/403/404 and policy errors (ValueError) are never retried. Returns (response, data, attempts)."""
+    max_retries = MAX_RETRIES if max_retries is None else max_retries
+    attempt = 0
+    while True:
+        try:
+            resp, data = _download(url, session, max_bytes=max_bytes, headers=headers)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt >= max_retries:
+                raise
+            _sleep(_retry_delay(attempt, None))
+            attempt += 1
+            continue
+        if resp.status_code in TRANSIENT_STATUSES and attempt < max_retries:
+            _sleep(_retry_delay(attempt, resp))
+            attempt += 1
+            continue
+        return resp, data, attempt + 1
+
+
+def robots_allowed(url: str, session: requests.Session) -> bool:
+    """Respect robots.txt for web pages. Only an explicit Disallow blocks; a missing or unreadable
+    robots.txt allows the request (the request itself then decides). Cached per host."""
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin not in _robots_cache:
+        parser = None
+        try:
+            resp, data = _download(origin + "/robots.txt", session, max_bytes=MAX_ROBOTS_BYTES)
+            if resp.status_code == 200:
+                parser = RobotFileParser()
+                parser.parse(decode_text(data).splitlines())
+        except (requests.RequestException, ValueError):
+            parser = None
+        _robots_cache[origin] = parser
+    parser = _robots_cache[origin]
+    return parser is None or parser.can_fetch(ROBOTS_AGENT, url)
+
+
+def fetch_url(
+    url: str,
+    max_chars: int = MAX_TEXT_CHARS,
+    session: requests.Session | None = None,
+    respect_robots: bool = True,
+) -> FetchResult:
     """Fetch a URL and return its readable text. Never raises: failures are reported in the result."""
     session = session or requests.Session()
     try:
-        resp, data = _download(url, session)
+        if respect_robots and _check_url(url) is None and not robots_allowed(url, session):
+            return FetchResult(url=url, final_url=url, ok=False, source_type="unknown", access_restricted=True,
+                               error="Disallowed by the site's robots.txt; not fetched.")
+        resp, data, attempts = download_with_retries(url, session)
     except (requests.RequestException, ValueError) as exc:
         return FetchResult(url=url, final_url=url, ok=False, source_type="unknown", error=str(exc))
 
     final_url = resp.url or url
     if resp.status_code >= 400:
         error = f"HTTP {resp.status_code}"
-        if resp.status_code in (401, 403):
+        restricted = resp.status_code in (401, 403)
+        if restricted:
             error += " (access denied; not retried or bypassed)"
+        elif resp.status_code in TRANSIENT_STATUSES:
+            error += f" (gave up after {attempts} attempts)"
         return FetchResult(
             url=url, final_url=final_url, ok=False, source_type="unknown",
-            http_status=resp.status_code, error=error,
+            http_status=resp.status_code, error=error, attempts=attempts, access_restricted=restricted,
         )
 
     content_type = (resp.headers.get("Content-Type") or "").lower()
-    path = urlparse(final_url).path.lower()
-    head = data.lstrip()[:1]
-    is_pdf = "pdf" in content_type or data[:5] == b"%PDF-" or path.endswith(".pdf")
-    is_json = "json" in content_type or (head in (b"{", b"[") and "html" not in content_type)
-    is_csv = "csv" in content_type or path.endswith(".csv")
-    # CSV downloads are often labelled application/vnd.ms-excel, so a .csv path wins.
-    is_xlsx = path.endswith((".xlsx", ".xlsm")) or (any(t in content_type for t in XLSX_TYPES) and not path.endswith(".csv"))
+    kind = detect_kind(content_type, final_url, data)
+    is_pdf, is_json, is_xlsx, is_csv = (kind == k for k in ("pdf", "json", "xlsx", "csv"))
     resource_url, metadata = "", {}
-    source_type = "pdf" if is_pdf else "json" if is_json else "xlsx" if is_xlsx else "csv" if is_csv else "html"
+    source_type = kind
     try:
         if is_pdf:
             title, text = extract_pdf_text(data)
@@ -335,9 +459,9 @@ def fetch_url(url: str, max_chars: int = MAX_TEXT_CHARS, session: requests.Sessi
             url=url, final_url=final_url, ok=False, source_type=source_type,
             http_status=resp.status_code, error="No readable text extracted (page may require JavaScript).",
         )
-    text, truncated = _truncate(text, max_chars)
+    text, truncated = _truncate(strip_controls(text), max_chars)
     return FetchResult(
-        url=url, final_url=final_url, ok=True, source_type=source_type, title=title,
+        url=url, final_url=final_url, ok=True, source_type=source_type, title=strip_controls(title),
         text=text, http_status=resp.status_code, truncated=truncated,
-        resource_url=resource_url, metadata=metadata,
+        resource_url=resource_url, metadata=metadata, attempts=attempts,
     )

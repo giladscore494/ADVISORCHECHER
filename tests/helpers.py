@@ -28,6 +28,11 @@ def make_pdf(text: str) -> bytes:
     return bytes(out)
 
 
+# A sentence present in every mocked document, so reports can quote it as their supporting excerpt.
+EXCERPT = "תקנה 4: בעל נגרר יבצע בדיקה תקופתית אחת לשנה"
+SOURCE_TEXT = f"פרק ב.\n{EXCERPT}, בתחנת בדיקה מורשית.\n§5 ..."
+
+
 def valid_report(url="https://www.gov.il/he/departments/legalInfo/regulation-x", n=1, cls="A") -> dict:
     opp = {
         "name": "Inspection equipment rental",
@@ -40,7 +45,8 @@ def valid_report(url="https://www.gov.il/he/departments/legalInfo/regulation-x",
         "revenue_model": "Daily rental",
         "startup_capital_estimate": "ILS 15,000",
         "existing_competition": ["Two service firms"],
-        "primary_sources": [{"title": "Regulation X", "url": url, "section": "4", "support": "Duty to inspect"}],
+        "primary_sources": [{"title": "Regulation X", "url": url, "section": "4", "support": "Duty to inspect",
+                             "excerpt": EXCERPT}],
         "secondary_sources": [],
         "contradictory_sources_checked": [],
         "red_team": ["VERIFIED FACT: no licence needed for rental"],
@@ -87,4 +93,4 @@ def fake_search(query, num_results=10):
 
 
 def fake_fetch(url):
-    return FetchResult(url=url, final_url=url, ok=True, source_type="html", title="Regulation X", text="§4 ...")
+    return FetchResult(url=url, final_url=url, ok=True, source_type="html", title="Regulation X", text=SOURCE_TEXT)

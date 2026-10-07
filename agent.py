@@ -1,7 +1,8 @@
 """Controlled tool-calling research loop.
 
-The model reasons, calls search_web / fetch_url / update_candidates, and we
-execute those tools under hard limits (steps, searches, fetches, duplicates).
+The model reasons, calls search_web / fetch_url / the data.gov.il dataset tools /
+update_candidates, and we execute those tools under hard limits (steps, searches,
+fetches, API calls, duplicates).
 When the model says it is done, or a limit is hit, we ask for the final JSON
 report, validate it, and retry once if it is malformed.
 """
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse, urlunparse
 
+import datagov
+from evidence import excerpt_found, extract_terms
 from fetcher import fetch_url
 from llm import LLMError, parse_tool_arguments
 from models import ResearchResult, parse_research_result, rank_opportunities
@@ -72,6 +75,62 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_government_datasets",
+            "description": "Search official Israeli government datasets on data.gov.il (CKAN package_search). "
+                           "Returns dataset ids, titles, publishers, formats and a relevance hint. Use Hebrew and English terms.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "rows": {"type": "integer", "minimum": 1, "maximum": datagov.MAX_SEARCH_ROWS, "default": 10},
+                    "start": {"type": "integer", "minimum": 0, "default": 0, "description": "Pagination offset."},
+                    **_PHASE_PARAMS,
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_government_dataset",
+            "description": "Get a data.gov.il dataset's metadata (description, publisher, update dates, license, resources "
+                           "with datastore_active). Rejects datasets unrelated to the research topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dataset_id": {"type": "string", "description": "Dataset id or name from search_government_datasets."},
+                    "query": {"type": "string", "description": "What you are looking for in this dataset (Hebrew/English terms)."},
+                    **_PHASE_PARAMS,
+                },
+                "required": ["dataset_id", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_government_resource",
+            "description": "Read records from a data.gov.il resource relevant to `query`. Checks relevance first; uses "
+                           "datastore_search when datastore_active, otherwise the official download URL. Returns bounded, "
+                           "query-matched records or passages plus provenance (dataset/resource ids, publisher, dates).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_id": {"type": "string"},
+                    "query": {"type": "string", "description": "Terms that relevant records must contain (Hebrew/English)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": datagov.MAX_RECORDS, "default": 20},
+                    "offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "filters": {"type": "object", "description": "Optional exact-match column filters, e.g. {\"סוג\": \"נגרר\"}."},
+                    **_PHASE_PARAMS,
+                },
+                "required": ["resource_id", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_candidates",
             "description": "Record or update candidate opportunities in the research funnel.",
             "parameters": {
@@ -106,9 +165,17 @@ BLOCKED_SOURCE_GUIDANCE = (
     "cached or archived copies of the blocked page). Look for a publicly accessible official alternative instead: "
     "the same document as a PDF on gov.il, the law or regulation text on main.knesset.gov.il, the regulation as "
     "published in Reshumot (רשומות / קובץ תקנות), or a dataset on data.gov.il "
-    "(e.g. fetch https://data.gov.il/api/3/action/package_search?q=<terms>). "
+    "(use search_government_datasets). "
     "If no official copy can be retrieved, the finding that depends on this source is UNVERIFIED."
 )
+DATASET_SOURCE_TYPES = {"csv", "xlsx", "json", "ckan_resource", "ckan_dataset", "ckan_datastore"}
+# CKAN actions that return discovery metadata, never dataset contents: not evidence for a claim.
+CKAN_METADATA_ACTIONS = ("package_search", "package_show", "resource_show")
+
+
+def is_ckan_metadata_url(url: str) -> bool:
+    path = urlparse(url).path
+    return any(path.endswith(f"/action/{action}") for action in CKAN_METADATA_ACTIONS)
 
 
 @dataclass
@@ -117,6 +184,7 @@ class Limits:
     max_searches: int = 30
     max_fetches: int = 20
     max_opportunities: int = 5
+    max_api_calls: int = 40  # data.gov.il CKAN API calls per run
 
 
 @dataclass
@@ -146,9 +214,17 @@ class ResearchAgent:
         on_event: Callable[[dict], None] | None = None,
         search_fn: Callable[..., list[dict]] = search_web,
         fetch_fn: Callable[[str], Any] = fetch_url,
+        ckan_client: "datagov.CkanClient | None" = None,
     ):
         self.llm = llm
         self.limits = limits or Limits()
+        self.ckan = ckan_client or datagov.CkanClient(max_calls=self.limits.max_api_calls)
+        self.domain = ""
+        # Retrieved content (normalized URL -> text) used to confirm quoted excerpts.
+        self.retrieved_text: dict[str, str] = {}
+        # resource_id -> provenance, status and the records/passages that were returned.
+        self.dataset_evidence: dict[str, dict] = {}
+        self.seen_dataset_requests: set[str] = set()
         self.on_event = on_event or (lambda e: None)
         self.search_fn = search_fn
         self.fetch_fn = fetch_fn
@@ -165,6 +241,7 @@ class ResearchAgent:
         self.trace: dict[str, Any] = {
             "searches": [], "fetches": [], "model_calls": [], "tool_calls": [],
             "candidates": {}, "events": [], "warnings": [],
+            "dataset_searches": [], "dataset_inspections": [], "dataset_reads": [], "api_calls": [],
         }
 
     # ---------------------------------------------------------------- events
@@ -176,6 +253,7 @@ class ResearchAgent:
             "searches": self.search_count,
             "fetches": self.fetch_count,
             "candidates": len(self.trace["candidates"]),
+            "api_calls": self.ckan.calls,
             "elapsed_s": round(time.monotonic() - self.started, 1),
         }
         self.trace["events"].append(event)
@@ -253,15 +331,22 @@ class ResearchAgent:
             self.fetch_status.setdefault(normalize_url(res.final_url), status)
 
         if not res.ok:
-            self._emit(f"Could not read {url}: {res.error}", "error")
+            restricted = getattr(res, "access_restricted", False) or res.http_status in ACCESS_DENIED_STATUSES
+            if official:
+                self._emit(f"Official source unavailable — evidence not verified: {url} ({res.error})", "error")
+            else:
+                self._emit(f"Could not read {url}: {res.error}", "error")
             result = {"url": url, "ok": False, "error": res.error, "http_status": res.http_status}
-            if official and res.http_status in ACCESS_DENIED_STATUSES:
+            if official and restricted:
                 result["guidance"] = BLOCKED_SOURCE_GUIDANCE
                 alternatives = self._search_alternatives(url)
                 if alternatives is not None:
                     result["alternative_search"] = alternatives
             return {**result, **self._budget()}, True
 
+        self.retrieved_text[key] = res.text
+        if res.final_url:
+            self.retrieved_text.setdefault(normalize_url(res.final_url), res.text)
         result = {
             "url": url, "final_url": res.final_url, "ok": True, "source_type": res.source_type,
             "primary_source": official, "title": res.title,
@@ -299,6 +384,139 @@ class ResearchAgent:
             result["results"] = [r for r in result["results"] if normalize_url(r["url"]) != blocked]
         return {"query": query, **result}
 
+    # ------------------------------------------------------- government data
+    def _dataset_request_key(self, tool: str, args: dict) -> str:
+        relevant = {k: v for k, v in args.items() if k not in ("phase", "purpose")}
+        return tool + ":" + json.dumps(relevant, sort_keys=True, ensure_ascii=False).lower()
+
+    def _duplicate_dataset_request(self, tool: str, args: dict) -> bool:
+        key = self._dataset_request_key(tool, args)
+        if key in self.seen_dataset_requests:
+            return True
+        self.seen_dataset_requests.add(key)
+        return False
+
+    def _ckan_failure(self, exc: "datagov.CkanError", what: str) -> dict:
+        result = {"ok": False, "error": f"{what}: {exc}", "error_kind": exc.kind, "http_status": exc.http_status}
+        if exc.kind == "blocked":
+            result["guidance"] = BLOCKED_SOURCE_GUIDANCE
+        self._emit(f"Official source unavailable — evidence not verified ({what}: {exc})", "error")
+        return result
+
+    def _tool_dataset_search(self, args: dict) -> tuple[dict, bool]:
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return {"error": "query is required"}, False
+        if self._duplicate_dataset_request("search_government_datasets", args):
+            return {"error": "Duplicate dataset search rejected: already run with the same arguments."}, False
+        self._emit(args.get("purpose") or f"Searching official Israeli government datasets: {query}", "dataset")
+        entry = {"query": query, "results": [], "error": ""}
+        self.trace["dataset_searches"].append(entry)
+        try:
+            found = self.ckan.package_search(query, rows=args.get("rows", 10), start=args.get("start", 0))
+        except datagov.CkanError as exc:
+            entry["error"] = str(exc)
+            return self._ckan_failure(exc, "Dataset search failed"), True
+        terms = extract_terms(query, self.domain)
+        for d in found["results"]:
+            d["likely_relevant"] = datagov.assess_relevance(terms, datagov.metadata_fields(d))["relevant"]
+        entry["results"] = [{"id": d["id"], "title": d["title"], "publisher": d["publisher"],
+                             "likely_relevant": d["likely_relevant"]} for d in found["results"]]
+        found["note"] = ("Discovery only: a search hit is not evidence. Inspect relevant datasets, then read "
+                         "records with read_government_resource.")
+        return found, True
+
+    def _tool_dataset_inspect(self, args: dict) -> tuple[dict, bool]:
+        dataset_id = str(args.get("dataset_id", "")).strip()
+        if not dataset_id:
+            return {"error": "dataset_id is required"}, False
+        if self._duplicate_dataset_request("inspect_government_dataset", args):
+            return {"error": "Duplicate dataset inspection rejected: already inspected."}, False
+        self._emit(args.get("purpose") or f"Inspecting dataset metadata: {dataset_id}", "dataset")
+        try:
+            dataset = self.ckan.package_show(dataset_id)
+        except datagov.CkanError as exc:
+            self.trace["dataset_inspections"].append({"dataset_id": dataset_id, "status": "failed", "error": str(exc)})
+            return self._ckan_failure(exc, "Dataset metadata unavailable"), True
+        terms = extract_terms(args.get("query", ""), self.domain)
+        relevance = datagov.assess_relevance(terms, datagov.metadata_fields(dataset))
+        record = {"dataset_id": dataset["id"], "title": dataset["title"], "publisher": dataset["publisher"],
+                  "dataset_url": dataset["dataset_url"], "status": "relevant" if relevance["relevant"] else "rejected",
+                  "matched_terms": relevance["matched_terms"]}
+        self.trace["dataset_inspections"].append(record)
+        if not relevance["relevant"]:
+            self._emit(f"Dataset rejected: unrelated to research topic — {dataset['title']}", "rejected")
+            return {"status": "rejected", "dataset_id": dataset["id"], "title": dataset["title"],
+                    "publisher": dataset["publisher"],
+                    "reason": "Title, description, publisher and tags do not match the research topic or query. "
+                              "Do not use this dataset as evidence; continue searching."}, True
+        dataset["status"] = "relevant"
+        dataset["metadata_relevance"] = relevance
+        dataset["note"] = "Metadata only. Read records with read_government_resource(resource_id, query)."
+        return dataset, True
+
+    def _tool_dataset_read(self, args: dict) -> tuple[dict, bool]:
+        resource_id = str(args.get("resource_id", "")).strip()
+        query = str(args.get("query", "")).strip()
+        if not resource_id or not query:
+            return {"error": "resource_id and query are required"}, False
+        if self._duplicate_dataset_request("read_government_resource", args):
+            return {"error": "Duplicate read rejected: these records were already returned."}, False
+        self._emit(args.get("purpose") or f"Reading official dataset records: resource {resource_id}", "dataset")
+        try:
+            out = datagov.read_resource(self.ckan, resource_id, query, self.domain, limit=args.get("limit", 20),
+                                        offset=args.get("offset", 0), filters=args.get("filters"))
+        except datagov.CkanError as exc:
+            self._record_dataset_read(resource_id, {"status": "failed", "error": str(exc), "provenance": {}})
+            return self._ckan_failure(exc, "Resource metadata unavailable"), True
+        self._record_dataset_read(resource_id, out)
+        prov = out["provenance"]
+        label = f"{prov.get('dataset_title') or prov.get('dataset_id')} / {prov.get('resource_name') or resource_id}"
+        if out["status"] == "rejected":
+            self._emit(f"Dataset rejected: unrelated to research topic — {label}", "rejected")
+        elif out["status"] == "failed":
+            self._emit(f"Official source unavailable — evidence not verified: {label} ({out.get('error', '')})", "error")
+            if out.get("access_restricted"):
+                out["guidance"] = BLOCKED_SOURCE_GUIDANCE
+        elif out["status"] == "no_matching_records":
+            self._emit(f"No matching records in {label}", "dataset")
+        else:
+            self._emit(f"Read official dataset records: {label}", "dataset")
+            out["quote_instruction"] = ("To cite this resource, set resource_id and quote an exact record line "
+                                        "(or contiguous part of it) as the excerpt.")
+        return out, True
+
+    def _record_dataset_read(self, resource_id: str, out: dict) -> None:
+        prov = out.get("provenance", {})
+        evidence_text = out.get("records") or "\n".join(out.get("passages", []))
+        record = {"resource_id": resource_id, "status": out["status"], "error": out.get("error", ""),
+                  "reason": out.get("reason", ""), "evidence_text": evidence_text, **prov}
+        previous = self.dataset_evidence.get(resource_id)
+        if previous and previous["status"] == "ok":
+            # Keep earlier successful evidence; append newly returned records (pagination).
+            if record["status"] == "ok":
+                previous["evidence_text"] += "\n" + evidence_text
+        else:
+            self.dataset_evidence[resource_id] = record
+        self.trace["dataset_reads"].append({k: v for k, v in record.items() if k != "evidence_text"}
+                                           | {"records_returned": bool(evidence_text)})
+        ok = out["status"] == "ok"
+        error = {"rejected": "Dataset rejected: unrelated to the research topic.",
+                 "no_matching_records": "No records matching the research query were found.",
+                 }.get(out["status"], out.get("error", ""))
+        for url in (prov.get("source_url"), prov.get("download_url"), prov.get("metadata_api_url"), prov.get("data_api_url")):
+            if not url:
+                continue
+            key = normalize_url(url)
+            if ok:
+                self.retrieved_text[key] = self.retrieved_text.get(key, "") + "\n" + evidence_text
+            current = self.fetch_status.get(key)
+            if current and current.get("ok") and not ok:
+                continue
+            self.fetch_status[key] = {"ok": ok, "error": "" if ok else error, "http_status": out.get("http_status"),
+                                      "official": is_primary_source(url), "source_type": "dataset",
+                                      "resource_id": resource_id}
+
     def _tool_candidates(self, args: dict) -> tuple[dict, bool]:
         items = args.get("candidates")
         if not isinstance(items, list):
@@ -329,6 +547,9 @@ class ResearchAgent:
                 "search_web": self._tool_search,
                 "fetch_url": self._tool_fetch,
                 "update_candidates": self._tool_candidates,
+                "search_government_datasets": self._tool_dataset_search,
+                "inspect_government_dataset": self._tool_dataset_inspect,
+                "read_government_resource": self._tool_dataset_read,
             }.get(name)
             if handler is None:
                 result, progress = {"error": f"Unknown tool '{name}'"}, False
@@ -362,6 +583,7 @@ class ResearchAgent:
 
     def run(self, domain: str, instructions: str = "") -> RunResult:
         run = RunResult(domain=domain, trace=self.trace)
+        self.domain = domain
         lim = self.limits
         instructions = (instructions or "").strip()
         if len(instructions) > MAX_INSTRUCTIONS_CHARS:
@@ -436,25 +658,71 @@ class ResearchAgent:
             return
         run.error = f"The model did not return a valid report after 2 attempts. Last error: {last_error[:1000]}"
 
-    def _verify_source(self, src) -> None:
-        status = self.fetch_status.get(normalize_url(src.url))
+    def _verify_source(self, src, require_excerpt: bool) -> None:
+        """Fill provenance and verification from what this run actually retrieved (never from the model)."""
+        key = normalize_url(src.url)
+        status = self.fetch_status.get(key)
+        record = self.dataset_evidence.get(src.resource_id) if src.resource_id else None
+        if record is None and status and status.get("resource_id"):
+            record = self.dataset_evidence.get(status["resource_id"])
         src.official = is_primary_source(src.url)
-        src.verified = bool(status and status["ok"])
-        if status is None:
-            src.verification_note = "Not retrieved during this run."
-        elif not status["ok"]:
-            src.verification_note = f"Retrieval failed: {status['error']}"
+
+        if record is not None:
+            src.kind = "dataset"
+            src.resource_id = record["resource_id"]
+            src.dataset_id = record.get("dataset_id") or src.dataset_id
+            src.dataset_title = record.get("dataset_title", "")
+            src.publisher = record.get("publisher", "")
+            src.last_updated = record.get("resource_last_modified") or record.get("dataset_last_updated", "")
+            src.official = src.official or is_primary_source(record.get("source_url", ""))
+            src.retrieval_status = record["status"]
+            retrieved = record["status"] == "ok"
+            content = record.get("evidence_text", "")
+            failure = {
+                "rejected": "Dataset rejected: unrelated to the research topic; not evidence.",
+                "no_matching_records": "No records matching the research query were found in this resource.",
+            }.get(record["status"], f"Retrieval failed: {record.get('error', '')}")
+        else:
+            if status:
+                src.kind = "dataset" if status.get("source_type") in DATASET_SOURCE_TYPES else (
+                    "legal_document" if src.official else "web")
+            else:
+                src.kind = "dataset" if (src.dataset_id or src.resource_id) else (
+                    "legal_document" if src.official else "web")
+            retrieved = bool(status and status["ok"])
+            src.retrieval_status = "ok" if retrieved else ("failed" if status else "not_retrieved")
+            content = self.retrieved_text.get(key, "")
+            failure = f"Retrieval failed: {status['error']}" if status else "Not retrieved during this run."
+            if retrieved and (is_ckan_metadata_url(src.url) or (status or {}).get("source_type") in ("ckan_resource", "ckan_dataset")):
+                src.kind = "dataset"
+                src.retrieval_status = "metadata_only"
+                retrieved = False
+                failure = ("CKAN metadata (search/package/resource description) is not the dataset contents and "
+                           "cannot support a claim; read the records with read_government_resource.")
+
+        src.excerpt_verified = bool(retrieved and src.excerpt and excerpt_found(src.excerpt, content))
+        src.verified = retrieved and (src.excerpt_verified or not require_excerpt)
+        if not retrieved:
+            src.verification_note = failure
         elif not src.official:
             src.verification_note = "Retrieved, but not an official source."
+        elif not src.excerpt and require_excerpt:
+            src.verification_note = "Retrieved, but no supporting excerpt was quoted; the claim is not confirmed."
+        elif src.excerpt and not src.excerpt_verified:
+            src.verification_note = "Retrieved, but the quoted excerpt was not found in the retrieved content."
         else:
-            src.verification_note = "Retrieved and read during this run."
+            src.verification_note = "Retrieved during this run" + (
+                "; the quoted excerpt was found in the source." if src.excerpt_verified else ".")
 
     def _verify_opportunity(self, opp) -> None:
-        for src in opp.primary_sources + opp.secondary_sources + opp.contradictory_sources_checked:
-            self._verify_source(src)
+        for src in opp.primary_sources:
+            self._verify_source(src, require_excerpt=True)
+        for src in opp.secondary_sources + opp.contradictory_sources_checked:
+            self._verify_source(src, require_excerpt=False)
         official_ok = [s for s in opp.primary_sources if s.official and s.verified]
+        legal_ok = [s for s in official_ok if s.kind == "legal_document"]
         unverified = [s for s in opp.primary_sources if not (s.official and s.verified)]
-        opp.unread_primary_sources = [s.url for s in opp.primary_sources if not s.verified]
+        opp.unread_primary_sources = [s.url for s in opp.primary_sources if s.retrieval_status != "ok"]
         opp.verification_notes = [f"{s.url}: {s.verification_note}" for s in unverified]
         if official_ok and not unverified:
             opp.verification_status = "verified"
@@ -463,14 +731,23 @@ class ResearchAgent:
         else:
             opp.verification_status = "unverified"
             opp.verification_notes.insert(
-                0, "Legal finding UNVERIFIED: no official source supporting it was retrieved and read in this run.")
-        # Class A requires that all of its cited primary evidence is official and was retrieved and read.
-        if opp.classification == "A" and opp.verification_status != "verified":
-            opp.classification = "B"
-            opp.downgraded_from = "A"
-            opp.verification_notes.insert(
-                0, "Downgraded from A to B: not all supporting official evidence was retrieved and checked.")
-            self.trace["warnings"].append(f"'{opp.name}' downgraded from A to B (official evidence not fully verified).")
+                0, "Legal finding UNVERIFIED: no official source supporting it was retrieved and confirmed in this run.")
+        if any(s.kind == "dataset" for s in opp.primary_sources):
+            opp.verification_notes.append(
+                "Dataset evidence describes the dataset's contents; it is not by itself proof of a currently "
+                "applicable legal obligation. Dataset update dates are not legal effective dates.")
+        # Class A: all cited primary evidence verified, including an official legal document.
+        if opp.classification == "A":
+            reason = ""
+            if opp.verification_status != "verified":
+                reason = "not all supporting official evidence was retrieved and checked."
+            elif not legal_ok:
+                reason = "supported only by dataset evidence; no verified official legal text supports the claim."
+            if reason:
+                opp.classification = "B"
+                opp.downgraded_from = "A"
+                opp.verification_notes.insert(0, f"Downgraded from A to B: {reason}")
+                self.trace["warnings"].append(f"'{opp.name}' downgraded from A to B ({reason})")
         if opp.verification_status != "verified":
             self.trace["warnings"].append(f"'{opp.name}' cites primary sources that were not verified in this run.")
 
@@ -485,6 +762,7 @@ class ResearchAgent:
     def _finish(self, run: RunResult) -> RunResult:
         self.trace["stop_reason"] = run.stop_reason
         self.trace["elapsed_s"] = round(time.monotonic() - self.started, 1)
+        self.trace["api_calls"] = list(self.ckan.log)
         if run.result is not None:
             self.trace["final"] = run.result.model_dump()
         self._emit("Research complete." if not run.error else f"Research ended with an error: {run.error}", "done")
