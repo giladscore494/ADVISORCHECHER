@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 from fetcher import fetch_url
 from llm import LLMError, parse_tool_arguments
@@ -100,6 +100,15 @@ TOOLS = [
 MAX_NO_PROGRESS_ROUNDS = 3
 MAX_INSTRUCTIONS_CHARS = 5000
 NO_RESULT_MESSAGE = "No sufficiently strong opportunity found."
+ACCESS_DENIED_STATUSES = (401, 403)
+BLOCKED_SOURCE_GUIDANCE = (
+    "Access to this official page was denied. Do NOT try to bypass it (no other user agents, proxies, "
+    "cached or archived copies of the blocked page). Look for a publicly accessible official alternative instead: "
+    "the same document as a PDF on gov.il, the law or regulation text on main.knesset.gov.il, the regulation as "
+    "published in Reshumot (רשומות / קובץ תקנות), or a dataset on data.gov.il "
+    "(e.g. fetch https://data.gov.il/api/3/action/package_search?q=<terms>). "
+    "If no official copy can be retrieved, the finding that depends on this source is UNVERIFIED."
+)
 
 
 @dataclass
@@ -146,7 +155,9 @@ class ResearchAgent:
 
         self.seen_queries: set[str] = set()
         self.seen_urls: set[str] = set()
-        self.ok_urls: set[str] = set()
+        # normalized URL -> {"ok", "error", "http_status", "official", "source_type"}
+        self.fetch_status: dict[str, dict] = {}
+        self.url_titles: dict[str, str] = {}
         self.search_count = 0
         self.fetch_count = 0
         self.phase = "mapping"
@@ -191,18 +202,25 @@ class ResearchAgent:
         if self.search_count >= self.limits.max_searches:
             return {"error": "Search limit reached. Work with the evidence you already have."}, False
 
-        self.seen_queries.add(key)
+        return self._run_search(query, args.get("purpose", ""), args.get("num_results", 10))
+
+    def _run_search(self, query: str, purpose: str, num_results=10) -> tuple[dict, bool]:
+        """Execute a search that already passed duplicate and budget checks."""
+        self.seen_queries.add(normalize_query(query))
         self.search_count += 1
-        self._emit(args.get("purpose") or f"Searching: {query}", "search")
-        entry: dict[str, Any] = {"query": query, "purpose": args.get("purpose", ""), "results": [], "error": ""}
+        self._emit(purpose or f"Searching: {query}", "search")
+        entry: dict[str, Any] = {"query": query, "purpose": purpose, "results": [], "error": ""}
         self.trace["searches"].append(entry)
         try:
-            results = self.search_fn(query, num_results=args.get("num_results", 10))
+            results = self.search_fn(query, num_results=num_results)
         except SearchError as exc:
             entry["error"] = str(exc)
             self._emit(f"Search failed: {exc}", "error")
             return {"error": str(exc), **self._budget()}, True
         entry["results"] = [{"title": r["title"], "url": r["url"], "primary": r["primary_source"]} for r in results]
+        for r in results:
+            if r.get("title"):
+                self.url_titles.setdefault(normalize_url(r["url"]), r["title"])
         if not results:
             return {"results": [], "note": "No results. Try different wording or language.", **self._budget()}, True
         return {"results": results, **self._budget()}, True
@@ -221,22 +239,65 @@ class ResearchAgent:
         self.fetch_count += 1
         self._emit(args.get("purpose") or f"Reading {url}", "fetch")
         res = self.fetch_fn(url)
+        official = is_primary_source(res.final_url or url)
         self.trace["fetches"].append({
             "url": url, "ok": res.ok, "source_type": res.source_type, "title": res.title,
             "chars": len(res.text), "truncated": res.truncated, "error": res.error,
-            "primary": is_primary_source(res.final_url or url),
+            "primary": official, "http_status": res.http_status,
+            "resource_url": getattr(res, "resource_url", ""),
         })
+        status = {"ok": res.ok, "error": res.error, "http_status": res.http_status,
+                  "official": official, "source_type": res.source_type}
+        self.fetch_status[key] = status
+        if res.final_url:
+            self.fetch_status.setdefault(normalize_url(res.final_url), status)
+
         if not res.ok:
             self._emit(f"Could not read {url}: {res.error}", "error")
-            return {"url": url, "ok": False, "error": res.error, **self._budget()}, True
-        self.ok_urls.add(key)
-        if res.final_url:
-            self.ok_urls.add(normalize_url(res.final_url))
-        return {
+            result = {"url": url, "ok": False, "error": res.error, "http_status": res.http_status}
+            if official and res.http_status in ACCESS_DENIED_STATUSES:
+                result["guidance"] = BLOCKED_SOURCE_GUIDANCE
+                alternatives = self._search_alternatives(url)
+                if alternatives is not None:
+                    result["alternative_search"] = alternatives
+            return {**result, **self._budget()}, True
+
+        result = {
             "url": url, "final_url": res.final_url, "ok": True, "source_type": res.source_type,
-            "primary_source": is_primary_source(res.final_url or url), "title": res.title,
-            "truncated": res.truncated, "text": res.text, **self._budget(),
-        }, True
+            "primary_source": official, "title": res.title,
+            "truncated": res.truncated, "text": res.text,
+        }
+        if getattr(res, "resource_url", ""):
+            result["resource_url"] = res.resource_url
+            result["metadata"] = res.metadata
+        return {**result, **self._budget()}, True
+
+    def _alternative_query(self, url: str) -> str:
+        """Build a search for an accessible official copy of a blocked page, from its title or URL slug."""
+        basis = self.url_titles.get(normalize_url(url), "")
+        if not basis:
+            segments = [unquote(p) for p in urlparse(url).path.split("/") if p]
+            slug = segments[-1] if segments else ""
+            slug = re.sub(r"\.(aspx?|html?|php)$", "", slug, flags=re.IGNORECASE)
+            basis = re.sub(r"[-_+]+", " ", slug).strip()
+        if len(basis) < 4 or basis.isdigit():
+            return ""
+        return f"{basis} filetype:pdf site:gov.il"
+
+    def _search_alternatives(self, url: str) -> dict | None:
+        """On HTTP 401/403 from an official site, run one search (within the normal search budget)
+        for a publicly accessible official copy. Never retries or bypasses the blocked URL."""
+        query = self._alternative_query(url)
+        if not query or normalize_query(query) in self.seen_queries:
+            return None
+        if self.search_count >= self.limits.max_searches:
+            return {"note": "Search budget exhausted; could not look for an alternative official copy."}
+        self.trace["warnings"].append(f"Official source blocked ({url}); searched for an accessible official alternative.")
+        result, _ = self._run_search(query, "Looking for an accessible official copy of a blocked gov.il page")
+        blocked = normalize_url(url)
+        if "results" in result:
+            result["results"] = [r for r in result["results"] if normalize_url(r["url"]) != blocked]
+        return {"query": query, **result}
 
     def _tool_candidates(self, args: dict) -> tuple[dict, bool]:
         items = args.get("candidates")
@@ -375,15 +436,47 @@ class ResearchAgent:
             return
         run.error = f"The model did not return a valid report after 2 attempts. Last error: {last_error[:1000]}"
 
+    def _verify_source(self, src) -> None:
+        status = self.fetch_status.get(normalize_url(src.url))
+        src.official = is_primary_source(src.url)
+        src.verified = bool(status and status["ok"])
+        if status is None:
+            src.verification_note = "Not retrieved during this run."
+        elif not status["ok"]:
+            src.verification_note = f"Retrieval failed: {status['error']}"
+        elif not src.official:
+            src.verification_note = "Retrieved, but not an official source."
+        else:
+            src.verification_note = "Retrieved and read during this run."
+
+    def _verify_opportunity(self, opp) -> None:
+        for src in opp.primary_sources + opp.secondary_sources + opp.contradictory_sources_checked:
+            self._verify_source(src)
+        official_ok = [s for s in opp.primary_sources if s.official and s.verified]
+        unverified = [s for s in opp.primary_sources if not (s.official and s.verified)]
+        opp.unread_primary_sources = [s.url for s in opp.primary_sources if not s.verified]
+        opp.verification_notes = [f"{s.url}: {s.verification_note}" for s in unverified]
+        if official_ok and not unverified:
+            opp.verification_status = "verified"
+        elif official_ok:
+            opp.verification_status = "partially_verified"
+        else:
+            opp.verification_status = "unverified"
+            opp.verification_notes.insert(
+                0, "Legal finding UNVERIFIED: no official source supporting it was retrieved and read in this run.")
+        # Class A requires that all of its cited primary evidence is official and was retrieved and read.
+        if opp.classification == "A" and opp.verification_status != "verified":
+            opp.classification = "B"
+            opp.downgraded_from = "A"
+            opp.verification_notes.insert(
+                0, "Downgraded from A to B: not all supporting official evidence was retrieved and checked.")
+            self.trace["warnings"].append(f"'{opp.name}' downgraded from A to B (official evidence not fully verified).")
+        if opp.verification_status != "verified":
+            self.trace["warnings"].append(f"'{opp.name}' cites primary sources that were not verified in this run.")
+
     def _post_process(self, result: ResearchResult) -> ResearchResult:
         for opp in result.opportunities:
-            opp.unread_primary_sources = [
-                s.url for s in opp.primary_sources if normalize_url(s.url) not in self.ok_urls
-            ]
-            if opp.unread_primary_sources:
-                self.trace["warnings"].append(
-                    f"'{opp.name}' cites primary sources that were not successfully read in this run."
-                )
+            self._verify_opportunity(opp)
         result.opportunities = rank_opportunities(result.opportunities, self.limits.max_opportunities)
         if not result.opportunities and not result.no_opportunity_reason:
             result.no_opportunity_reason = NO_RESULT_MESSAGE

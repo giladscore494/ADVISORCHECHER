@@ -94,3 +94,28 @@ def test_trace_shows_none_when_no_instructions(monkeypatch):
     ])
     assert "custom_instructions" not in at.fake_llm.calls[0]["messages"][1]["content"]
     assert any(m.value == "_None provided._" for m in at.markdown)
+
+
+def test_verified_opportunity_shows_verified_badge(monkeypatch):
+    at = _run_ui(monkeypatch, [
+        tool_response(("fetch_url", {"url": URL})),
+        text_response("DONE"),
+        text_response(json.dumps(valid_report(URL))),
+    ])
+    label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
+    assert "Class A" in label and "✅ Evidence verified" in label
+    assert any("Official evidence verified" in s.value for s in at.success)
+
+
+def test_unverified_opportunity_is_flagged_and_downgraded(monkeypatch):
+    blocked = "https://www.gov.il/he/departments/legalInfo/never-read"
+    at = _run_ui(monkeypatch, [
+        text_response("DONE"),
+        text_response(json.dumps(valid_report(blocked))),
+    ])
+    label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
+    assert "Class B" in label and "❌ Unverified" in label
+    errors = " ".join(e.value for e in at.error)
+    assert "Legal finding UNVERIFIED" in errors and "Downgraded from A to B" in errors
+    md = " ".join(m.value for m in at.markdown)
+    assert f"❌ [Regulation X]({blocked})" in md and "Not retrieved during this run." in md

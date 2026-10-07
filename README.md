@@ -115,9 +115,33 @@ validation only, never a legal conclusion.
 - HTML: removes scripts, styles, nav, header, footer and forms, prefers `<main>` or `<article>`, and collapses whitespace.
 - PDF: detected by content type, `%PDF` magic bytes or a `.pdf` path. Extracts text with `pypdf` (first 60
   pages) and labels each page. OCR is not supported: a scanned PDF is reported as having no extractable text.
+- JSON: pretty-printed. data.gov.il **CKAN** API responses get a readable rendering:
+  - `resource_show` returns the resource metadata and the downloadable `resource_url`, which the agent fetches next.
+  - `package_show` lists the dataset's resources.
+  - `datastore_search` renders records as a table.
+  - CKAN errors (`success: false`) are reported as failures.
+- CSV and XLSX (official datasets):
+  - CSV is decoded as UTF-8, then Windows-1255 (common in Israeli government files).
+  - XLSX is read with `openpyxl`. Legacy `.xls` files are reported as unsupported.
+  - Output is bounded to 200 rows per file or sheet and 5 sheets, with a zip-bomb guard on XLSX.
 - Limits: 10s connect / 30s read timeout, 15 MB download cap, 15,000 extracted characters (truncation is flagged).
 - Only http(s). Private, loopback and link-local hosts are refused, and redirects are followed manually so
   each hop is checked.
+- HTTP 401/403 is reported as access denied and **never retried or bypassed**. When an official site
+  blocks a page, the agent runs one search for a publicly accessible official copy (a gov.il PDF,
+  Knesset text, Reshumot or a data.gov.il dataset). That search counts against the normal search budget.
+
+## Evidence verification
+
+After the final report is validated, the agent checks every cited source against what was actually retrieved
+in the run. The model cannot set these fields itself.
+- Each source is marked ✅ (official and read), ☑️ (read but not official) or ❌ (not retrieved, with the
+  reason, e.g. HTTP 403).
+- Each opportunity is **verified** (all primary sources official and read), **partially verified** or
+  **unverified**. An unverified legal finding is flagged prominently in the UI.
+- **Class A requires fully verified official evidence.** Otherwise the opportunity is downgraded to B and
+  the downgrade is shown.
+- Within a class, better-verified opportunities rank first.
 
 ## Tests
 
