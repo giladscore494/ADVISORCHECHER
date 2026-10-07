@@ -67,7 +67,8 @@ def _valid_sources(items) -> list:
     """Evidence lists inside checks: drop malformed entries instead of rejecting the whole report."""
     if not isinstance(items, list):
         return []
-    return [i for i in items if isinstance(i, dict) and str(i.get("url", "")).strip().startswith(("http://", "https://"))]
+    return [i for i in items if isinstance(i, SourceRef) or (
+        isinstance(i, dict) and str(i.get("url", "")).strip().startswith(("http://", "https://")))]
 
 
 class LegalCheck(BaseModel):

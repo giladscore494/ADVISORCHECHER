@@ -104,16 +104,17 @@ def summarize_result(tool: str, args: dict, result: dict) -> dict:
         return {"status": result.get("status"), "resource_id": args.get("resource_id"), "query": args.get("query"),
                 "records": _short(result.get("records"), 600) if isinstance(result.get("records"), str) else None}
     if tool == "get_evidence":
-        return {"evidence_id": result.get("evidence_id"), "note": "re-retrieved evidence (compacted again)"}
+        return {"retrieved_evidence_id": result.get("evidence_id"), "note": "re-retrieved evidence (compacted again)"}
     # record_findings, update_candidates, update_checklist, list/status tools: already small.
     text = json.dumps(result, ensure_ascii=False)
     return result if len(text) <= 1500 else {"summary": _short(text, 1200)}
 
 
 def stub_content(evidence_id: str, tool: str, args: dict, result: dict) -> str:
-    return json.dumps({"evidence_id": evidence_id, "compacted": True,
-                       "note": f"Full result: get_evidence('{evidence_id}')",
-                       **summarize_result(tool, args, result)}, ensure_ascii=False)
+    out: dict = {"evidence_id": evidence_id, "compacted": True}
+    out.update({k: v for k, v in summarize_result(tool, args, result).items() if k not in out})
+    out["full_result"] = f"get_evidence('{evidence_id}')"
+    return json.dumps(out, ensure_ascii=False)
 
 
 def strip_old_reasoning(m: dict) -> bool:

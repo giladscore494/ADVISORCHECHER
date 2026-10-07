@@ -292,3 +292,31 @@ def test_snapshot_status_and_provider_choice(monkeypatch):
     box.select("openai").run()
     assert any("OPENAI_API_KEY" in e.value for e in at.error)
     assert at.button[0].disabled
+
+
+def test_separate_verification_counters_and_unresolved_claims(monkeypatch):
+    """10/11 source-verified quotes must never read as 10/11 verified legal conclusions."""
+    from helpers import EXCERPT
+
+    report = valid_report(URL, legal=False)
+    report["opportunities"][0]["regulatory_mechanism"] = "Rental equipment is exempt (פטור) from licensing."
+    at = _run_ui(monkeypatch, [
+        tool_response(("fetch_url", {"url": URL})),
+        tool_response(("record_findings", {"findings": [
+            {"statement": "Yearly inspection duty applies", "source_url": URL, "excerpt": EXCERPT,
+             "claim_type": "legal_conclusion"},
+            {"statement": "Regulation X text mentions inspections", "source_url": URL, "excerpt": EXCERPT}]})),
+        text_response("DONE"),
+        text_response(json.dumps(report)),
+    ])
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Sources verified"] == "2/2"
+    assert metrics["Legal conclusions verified"] == "0/1"
+    assert metrics["Business advantages verified"] == "0/0"
+    label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
+    assert "Class B" in label and "Source ✅" in label and "Legal ❌" in label
+    errors = " ".join(e.value for e in at.error)
+    assert "Exemption / no-requirement claim NOT established" in errors
+    md = " ".join(m.value for m in at.markdown)
+    assert "legal conclusions verified 0/1" in md
+    assert any("Opportunities: source verified 1/1 · legal applicability verified 0/1" in c.value for c in at.caption)

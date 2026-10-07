@@ -686,7 +686,11 @@ class GovernmentData:
             for t in terms:
                 if t.isdigit():
                     tokens = tokens if tokens is not None else set(normalize_text(text).split())
-                    hit = t in tokens  # whole tokens only; code hierarchy matching is done on the code index
+                    # Whole tokens only. In a classification field a number also matches as an HS level (4/6/8
+                    # digits) of the properly zero-padded code: 7318 matches 7318150000, never 0708909000.
+                    hit = t in tokens or (
+                        is_code_field(field) and len(t) in (4, 6, 8)
+                        and normalize_code(value, numeric_field=isinstance(value, (int, float))).startswith(t))
                 else:
                     hit = bool(matched_terms(token_variants(t), text))
                 if not hit:

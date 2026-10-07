@@ -975,12 +975,17 @@ class ResearchAgent:
         for u in (url, final_url):
             if u:
                 self.url_docs[normalize_url(u)] = doc_id
+        if doc_id in self.documents:  # identical content served by another URL: same content-addressed document
+            urls = self.documents[doc_id].setdefault("urls", [self.documents[doc_id]["url"]])
+            if url not in urls:
+                urls.append(url)
+            return
         self.documents[doc_id] = {
             "document_id": doc_id, "url": url, "final_url": final_url or url, "title": meta["title"],
             "source_type": meta["source_type"], "unit": meta["unit"], "page_count": meta["page_count"],
             "chars": meta["chars"], "status": meta["status"], "issues": meta["issues"],
             "content_sha256": meta["content_sha256"], "step": self.step + 1, "evidence_id": self._current_eid,
-            "from_cache": from_cache, "official": is_primary_source(final_url or url),
+            "from_cache": from_cache, "official": is_primary_source(final_url or url), "urls": [url],
         }
 
     def _ensure_document(self, doc_id: str) -> str | None:

@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 
@@ -93,7 +94,8 @@ class FakeLLM:
         self.warnings = []
 
     def chat(self, messages, tools=None, json_mode=False):
-        self.calls.append({"messages": list(messages), "tools": tools, "json_mode": json_mode})
+        # Deep copy: the agent compacts older messages in place later; record what was actually sent.
+        self.calls.append({"messages": copy.deepcopy(messages), "tools": tools, "json_mode": json_mode})
         return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
 
@@ -132,11 +134,15 @@ def _bidi_runs(line: str) -> list[tuple[str, bool]]:
     return runs
 
 
-def make_text_pdf(pages: list[str], blank_pages: tuple[int, ...] = (), font_size: int = 10) -> bytes:
+def make_text_pdf(pages: list[str], blank_pages: tuple[int, ...] = (), font_size: int = 10,
+                  tables: dict | None = None) -> bytes:
     """Multi-page PDF with arbitrary Unicode text (a ToUnicode CMap maps one byte per character).
     Hebrew lines are laid out like real government PDFs: glyphs stored in visual order and positioned right to
-    left. `blank_pages` (1-based) get no text at all, like scanned image pages."""
-    chars = sorted({c for p in pages for c in p if c != "\n"} | {" "})
+    left. `blank_pages` (1-based) get no text at all, like scanned image pages. `tables` maps a 1-based page to
+    rows of cells, drawn as a ruled grid; for Hebrew cells the first column is on the right, as in RTL tables."""
+    tables = tables or {}
+    cell_text = [c for rows in tables.values() for row in rows for c in row]
+    chars = sorted({c for p in pages + cell_text for c in p if c != "\n"} | {" "})
     if len(chars) > 220:
         raise ValueError("too many distinct characters for a one-byte encoding")
     code = {c: 0x21 + i for i, c in enumerate(chars)}
@@ -175,6 +181,24 @@ def make_text_pdf(pages: list[str], blank_pages: tuple[int, ...] = (), font_size
                     ops.append(f"1 0 0 1 40 {y} Tm ({enc(line)}) Tj")
                 y -= 14
         ops.append("ET")
+        rows = tables.get(i + 1) or []
+        if rows:
+            cols, cw, rh, top = len(rows[0]), 160, 20, 400
+            rtl = any(_HEB.search(c) for row in rows for c in row)
+            for r, row in enumerate(rows):
+                for c, text in enumerate(row):
+                    col = cols - 1 - c if rtl else c
+                    x0, y0 = 60 + col * cw, top - (r + 1) * rh
+                    ops.append(f"{x0} {y0} {cw} {rh} re S")
+                    ops.append("BT /F1 10 Tf")
+                    if _HEB.search(text):
+                        x = x0 + cw - 6
+                        for run, is_rtl in _bidi_runs(text):
+                            x -= len(run) * width
+                            ops.append(f"1 0 0 1 {x:.1f} {y0 + 6} Tm ({enc(run[::-1] if is_rtl else run)}) Tj")
+                    else:
+                        ops.append(f"1 0 0 1 {x0 + 6} {y0 + 6} Tm ({enc(text)}) Tj")
+                    ops.append("ET")
         stream = "\n".join(ops).encode()
         objs[6 + 2 * i] = (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents {7 + 2 * i} 0 R "
                            f"/Resources << /Font << /F1 3 0 R >> >> >>").encode()
