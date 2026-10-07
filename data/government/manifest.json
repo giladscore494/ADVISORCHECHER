@@ -3,7 +3,7 @@
   "resources": {
     "customs_tariff": {
       "resource_id": "5536eaa1-2e51-406b-aff6-b9ca02801b7c",
-      "label": "Customs tariff (תעריף המכס)",
+      "label": "Customs tariff & purchase tax book (ספר סיווג טובין ביבוא - תעריף המכס ומס קניה)",
       "current": {
         "version": "20261007T020940Z",
         "retrieved_at": "2026-10-07T02:09:40Z",
@@ -28,27 +28,23 @@
         "metadata_fingerprint": "abd9b7c5daab53d3f1103c733ebbf76cd9a57661aa9e2e285f7f34400d933a4e",
         "snapshot_json": "snapshots/customs_tariff/20261007T020940Z/snapshot.json",
         "verified_at": "2026-10-07T02:09:40Z",
-        "checked_at": "2026-10-07T02:09:40Z"
+        "checked_at": "2026-10-07T02:35:52Z"
       },
       "versions": [
         "20261007T020940Z"
       ],
       "last_attempt": {
-        "at": "2026-10-07T02:09:40Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261007T020940Z.",
-        "rows": 13173,
-        "version": "20261007T020940Z",
-        "storage": "repo",
-        "file_bytes": 466458,
-        "duration_s": 7.8,
-        "requests": 7
+        "at": "2026-10-07T02:35:52Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 3.0,
+        "requests": 3
       },
-      "last_success_at": "2026-10-07T02:09:40Z"
+      "last_success_at": "2026-10-07T02:35:52Z"
     },
     "free_import_order": {
       "resource_id": "a36db570-09f2-4521-8e3d-0290eb839c68",
-      "label": "Free Import Order requirements (צו יבוא חופשי)",
+      "label": "Legal requirements - Free Import Order (דרישות חוקיות - צו יבוא חופשי)",
       "current": {
         "version": "20261007T020948Z",
         "retrieved_at": "2026-10-07T02:09:48Z",
@@ -73,27 +69,23 @@
         "metadata_fingerprint": "af095a8b8115b58c86adb2cee6de2ded8df7ae96a34ce7268961627ff2333f80",
         "snapshot_json": "snapshots/free_import_order/20261007T020948Z/snapshot.json",
         "verified_at": "2026-10-07T02:09:48Z",
-        "checked_at": "2026-10-07T02:09:48Z"
+        "checked_at": "2026-10-07T02:35:55Z"
       },
       "versions": [
         "20261007T020948Z"
       ],
       "last_attempt": {
-        "at": "2026-10-07T02:09:48Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261007T020948Z.",
-        "rows": 28949,
-        "version": "20261007T020948Z",
-        "storage": "repo",
-        "file_bytes": 1828768,
-        "duration_s": 12.3,
-        "requests": 10
+        "at": "2026-10-07T02:35:55Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 2.4,
+        "requests": 3
       },
-      "last_success_at": "2026-10-07T02:09:48Z"
+      "last_success_at": "2026-10-07T02:35:55Z"
     },
     "mandatory_standards": {
       "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
-      "label": "Mandatory standards (תקנים רשמיים)",
+      "label": "Official standards registry (מאגר תקנים רשמיים)",
       "current": {
         "version": "20261007T021001Z",
         "retrieved_at": "2026-10-07T02:10:01Z",
@@ -118,27 +110,23 @@
         "metadata_fingerprint": "f4df6092e35cef0519339712c4e898a2058f5aaa059139cfb7b18b37cbb6eff4",
         "snapshot_json": "snapshots/mandatory_standards/20261007T021001Z/snapshot.json",
         "verified_at": "2026-10-07T02:10:01Z",
-        "checked_at": "2026-10-07T02:10:01Z"
+        "checked_at": "2026-10-07T02:35:58Z"
       },
       "versions": [
         "20261007T021001Z"
       ],
       "last_attempt": {
-        "at": "2026-10-07T02:10:01Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261007T021001Z.",
-        "rows": 551,
-        "version": "20261007T021001Z",
-        "storage": "repo",
-        "file_bytes": 149673,
-        "duration_s": 5.3,
-        "requests": 5
+        "at": "2026-10-07T02:35:58Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 2.9,
+        "requests": 3
       },
-      "last_success_at": "2026-10-07T02:10:01Z"
+      "last_success_at": "2026-10-07T02:35:58Z"
     },
     "import_regulations": {
       "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
-      "label": "Additional import regulations",
+      "label": "Legal requirements - additional orders (דרישות חוקיות - צוים נוספים)",
       "current": {
         "version": "20261007T021006Z",
         "retrieved_at": "2026-10-07T02:10:06Z",
@@ -163,27 +151,23 @@
         "metadata_fingerprint": "f5986257fc06da53cc925d7ef01ed1b9b459630656ef266661613e8dbb4bf37a",
         "snapshot_json": "snapshots/import_regulations/20261007T021006Z/snapshot.json",
         "verified_at": "2026-10-07T02:10:06Z",
-        "checked_at": "2026-10-07T02:10:06Z"
+        "checked_at": "2026-10-07T02:36:00Z"
       },
       "versions": [
         "20261007T021006Z"
       ],
       "last_attempt": {
-        "at": "2026-10-07T02:10:06Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261007T021006Z.",
-        "rows": 3460,
-        "version": "20261007T021006Z",
-        "storage": "repo",
-        "file_bytes": 415675,
-        "duration_s": 5.2,
-        "requests": 5
+        "at": "2026-10-07T02:36:00Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 3.0,
+        "requests": 3
       },
-      "last_success_at": "2026-10-07T02:10:06Z"
+      "last_success_at": "2026-10-07T02:36:00Z"
     },
     "standards_declarations": {
       "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
-      "label": "Official standards declarations (הכרזות תקנים רשמיים)",
+      "label": "Official standards declarations in Reshumot (אכרזת תקנים ברשומות)",
       "current": {
         "version": "20261007T021011Z",
         "retrieved_at": "2026-10-07T02:10:11Z",
@@ -208,43 +192,39 @@
         "metadata_fingerprint": "d2b9c0c52e68d49ccafb38729131419de9d55a66077625e85e7b642ee5250606",
         "snapshot_json": "snapshots/standards_declarations/20261007T021011Z/snapshot.json",
         "verified_at": "2026-10-07T02:10:11Z",
-        "checked_at": "2026-10-07T02:10:11Z"
+        "checked_at": "2026-10-07T02:36:03Z"
       },
       "versions": [
         "20261007T021011Z"
       ],
       "last_attempt": {
-        "at": "2026-10-07T02:10:11Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261007T021011Z.",
-        "rows": 686,
-        "version": "20261007T021011Z",
-        "storage": "repo",
-        "file_bytes": 38563,
-        "duration_s": 4.9,
-        "requests": 5
+        "at": "2026-10-07T02:36:03Z",
+        "status": "unchanged",
+        "message": "Official metadata and row total unchanged; download skipped.",
+        "duration_s": 3.0,
+        "requests": 3
       },
-      "last_success_at": "2026-10-07T02:10:11Z"
+      "last_success_at": "2026-10-07T02:36:03Z"
     }
   },
-  "generated_at": "2026-10-07T02:10:16Z",
+  "generated_at": "2026-10-07T02:36:06Z",
   "source": {
     "portal": "https://data.gov.il",
     "api": "https://data.gov.il/api/3/action/",
     "terms": "Data retrieved read-only from data.gov.il under each dataset's license."
   },
   "last_run": {
-    "started_at": "2026-10-07T02:09:40Z",
-    "finished_at": "2026-10-07T02:10:16Z",
-    "requests": 32,
+    "started_at": "2026-10-07T02:35:52Z",
+    "finished_at": "2026-10-07T02:36:06Z",
+    "requests": 15,
     "retries": 0,
     "results": {
-      "customs_tariff": "updated",
-      "free_import_order": "updated",
-      "mandatory_standards": "updated",
-      "import_regulations": "updated",
-      "standards_declarations": "updated"
+      "customs_tariff": "unchanged",
+      "free_import_order": "unchanged",
+      "mandatory_standards": "unchanged",
+      "import_regulations": "unchanged",
+      "standards_declarations": "unchanged"
     },
-    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/37560625999"
+    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/37562689004"
   }
 }
