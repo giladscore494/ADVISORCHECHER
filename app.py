@@ -13,6 +13,7 @@ import local_data
 import partial_report
 import research_runner
 import research_store
+import verification
 from config import get_int, get_setting
 from models import ResearchResult
 
@@ -31,6 +32,14 @@ VERIFICATION_LABELS = {
     "partially_verified": "⚠️ Partially verified",
     "unverified": "❌ Unverified",
 }
+DIMENSION_ICONS = {"verified": "✅", "partially_verified": "⚠️", "unverified": "❌", "contradicted": "⛔"}
+DIMENSION_NAMES = {"source": "Source", "legal": "Legal applicability", "business": "Business advantage"}
+
+
+def dim_label(status: str | None) -> str:
+    status = status or "unverified"
+    return f"{DIMENSION_ICONS.get(status, '❌')} {verification.LABELS.get(status, 'UNVERIFIED')}"
+
 EVENT_ICONS = {"search": "🔎", "fetch": "📄", "error": "⚠️", "candidates": "🧪", "done": "✅",
                "dataset": "🗂️", "rejected": "⛔"}
 READ_STATUS_ICONS = {"ok": "✅", "rejected": "⛔", "no_matching_records": "∅", "failed": "❌"}
@@ -134,6 +143,16 @@ with st.expander("Advanced settings"):
     max_fetches = c3.number_input("Max URLs to read", 0, 100, get_int("MAX_FETCHES", 20))
     max_api_calls = c4.number_input("Max data.gov.il API calls", 0, 200, get_int("MAX_CKAN_CALLS", 40))
     max_opps = c5.number_input("Max final opportunities", 1, 10, 5)
+    d1, d2, d3 = st.columns(3)
+    context_budget = d1.number_input(
+        "Context budget (est. tokens)", 4000, 400000, get_int("CONTEXT_BUDGET_TOKENS", 30000), step=2000,
+        help="Conversation history sent per model call before older tool results are compacted to stubs "
+             "(the full results stay retrievable by evidence id).")
+    max_completion_rounds = d2.number_input(
+        "Completion reviews", 0, 3, 1,
+        help="Times the agent reviews unresolved critical questions before finishing (0 disables).")
+    max_doc_queries = d3.number_input("Max document queries", 0, 300, 60,
+                                      help="search_document / read_document_range / get_document_status calls.")
 
 start = st.button("Start Research", type="primary", disabled=bool(missing) or not domain.strip())
 
@@ -171,7 +190,9 @@ def run_inline(store, domain: str, instructions: str, limits: agent.Limits, prov
 if start:
     store = get_store()
     if store is not None:
-        limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps), int(max_api_calls))
+        limits = agent.Limits(int(max_steps), int(max_searches), int(max_fetches), int(max_opps), int(max_api_calls),
+                              max_document_queries=int(max_doc_queries), context_budget_tokens=int(context_budget),
+                              max_completion_rounds=int(max_completion_rounds))
         try:
             if run_mode() == "inline":
                 run_id = run_inline(store, domain.strip(), instructions.strip(), limits, provider)
@@ -210,6 +231,10 @@ def source_links(sources) -> None:
         if s.excerpt:
             mark = "✓" if s.excerpt_verified else "✗"
             line += f"  \n  > {mark} “{md(s.excerpt)}”"
+            if s.matched_pages:
+                line += f"  \n  Found on page(s) {', '.join(map(str, s.matched_pages))}" + (
+                    f" of `{md(s.document_id)}`" if s.document_id else "") + (
+                    f" ⚠️ cited page {md(s.page)} is wrong" if s.page_mismatch else "")
         if s.verification_note and not (s.verified and s.official):
             line += f"  \n  _{md(s.verification_note)}_"
         st.markdown(line)
@@ -219,18 +244,47 @@ def bullet_list(items: list[str]) -> None:
     st.markdown("\n".join(f"- {i}" for i in items) if items else "_None recorded._")
 
 
+def show_dimensions(opp) -> None:
+    """Three separate verification dimensions; never merged into one 'verified' badge."""
+    rows = [{"dimension": DIMENSION_NAMES["source"], "status": dim_label(opp.verification_status),
+             "meaning": "Cited text / record retrieved in this run and the quote found in it"},
+            {"dimension": DIMENSION_NAMES["legal"], "status": dim_label(opp.legal_verification),
+             "meaning": "Provision, scope, validity, exceptions and classification checked"},
+            {"dimension": DIMENSION_NAMES["business"], "status": dim_label(opp.business_verification),
+             "meaning": "Advantage over competing importers, not a generally available rule"}]
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+    for key in ("legal", "business"):
+        notes = (opp.dimension_notes or {}).get(key) or []
+        if notes:
+            st.caption(f"{DIMENSION_NAMES[key]}: " + " · ".join(md(n) for n in notes[:6]))
+    checks = opp.legal_checks
+    st.dataframe([{"legal check": k.replace("_", " "), "model": getattr(checks, k).status,
+                   "verified": "✅" if getattr(checks, k).verified else "❌",
+                   "note": getattr(checks, k).verification_note, "finding": getattr(checks, k).finding}
+                  for k in verification.LEGAL_CHECKS], hide_index=True, use_container_width=True)
+
+
 def show_opportunity(opp, expanded: bool) -> None:
     header = (f"{opp.name}  ·  Score {opp.business_score}/100  ·  Class {opp.classification}  ·  "
-              f"Confidence {opp.confidence}%  ·  {VERIFICATION_LABELS[opp.verification_status]}")
+              f"Confidence {opp.confidence}%  ·  Source {DIMENSION_ICONS[opp.verification_status]}  ·  "
+              f"Legal {DIMENSION_ICONS[opp.legal_verification]}  ·  Advantage {DIMENSION_ICONS[opp.business_verification]}")
     with st.expander(header, expanded=expanded):
         st.markdown(f"**{CLASS_LABELS[opp.classification]}**")
         if opp.verification_status == "verified":
-            st.success("Official evidence verified: every cited primary source was retrieved and read in this run.")
+            st.success("Source evidence verified: every cited primary source was retrieved and its quote found in this "
+                       "run. This verifies the quotes, not the legal conclusion (see Legal applicability).")
         else:
             box = st.error if opp.verification_status == "unverified" else st.warning
             title = ("Legal finding UNVERIFIED." if opp.verification_status == "unverified"
                      else "Partially verified: some cited primary sources could not be retrieved or are not official.")
             box("\n".join([f"**{title}** Verify manually before relying on it."] + [f"- {n}" for n in opp.verification_notes]))
+        if opp.negative_claim and opp.legal_verification != "verified":
+            st.error("**Exemption / no-requirement claim NOT established.** It remains an unresolved hypothesis until "
+                     "explicit official legal text is verified.")
+        elif opp.legal_verification != "verified":
+            st.warning(f"**Legal applicability {verification.LABELS[opp.legal_verification]}.** "
+                       "Professional legal review required.")
+        show_dimensions(opp)
         if opp.summary:
             st.markdown(opp.summary)
         st.markdown("#### Business thesis")
@@ -336,12 +390,63 @@ def show_trace(trace: dict) -> None:
             st.dataframe(
                 [{"candidate": n, **c} for n, c in cands.items()], hide_index=True, use_container_width=True
             )
-        tu = trace.get("token_usage") or {}
-        if tu.get("model_calls"):
-            st.caption(f"Tokens: {tu.get('prompt_tokens', 0)} input · {tu.get('completion_tokens', 0)} output · "
-                       f"{tu.get('model_calls', 0)} model calls")
+        show_checklist(trace.get("checklist") or [])
+        show_documents(trace)
+        show_tokens(trace)
         for e in trace.get("api_errors", []):
             st.markdown(f"- ❌ {md(e.get('source'))}: {md(e.get('error'))}")
+
+
+def show_checklist(items: list) -> None:
+    if not items:
+        return
+    st.markdown("**Critical-evidence checklist**")
+    icons = {"resolved": "✅", "unresolved": "❓", "open": "⏳", "not_applicable": "➖"}
+    for it in items:
+        st.markdown(f"- {icons.get(it['status'], '•')} **{it['status'].upper()}** {md(it['question'])}"
+                    + (f"  \n  _{md(it['note'])}_" if it.get("note") else "")
+                    + (f"  \n  Evidence: {md(', '.join(it['evidence']))}" if it.get("evidence") else ""))
+
+
+def show_documents(trace: dict) -> None:
+    docs = trace.get("documents") or []
+    if docs:
+        st.markdown(f"**Documents stored ({len(docs)}; complete text, page-indexed)**")
+        for d in docs:
+            icon = "✅" if d.get("status") == "complete" else "⚠️"
+            st.markdown(f"- {icon} `{md(d['document_id'])}` [{md(d.get('title') or d['url'])}]({d.get('final_url') or d['url']})"
+                        f" · {d.get('page_count')} {d.get('unit', 'page')}s · {d.get('chars', 0):,} chars · extraction "
+                        f"{md(d.get('status'))}" + "".join(f"  \n  - {md(i)}" for i in d.get("issues", [])))
+    queries = trace.get("document_queries") or []
+    if queries:
+        st.markdown(f"**Document queries ({len(queries)})**")
+        for q in queries:
+            st.markdown(f"- `{md(q['tool'])}` {md(q['document_id'])} {md(json.dumps(q.get('args'), ensure_ascii=False))}"
+                        + (f" · {q.get('hits')} passages, pages {q.get('pages')}" if "hits" in q else "")
+                        + (f" · pages {q.get('pages')}" if q["tool"] == "read_document_range" else "")
+                        + (f" ❌ {md(q['error'])}" if q.get("error") else ""))
+
+
+def show_tokens(trace: dict) -> None:
+    tu = trace.get("token_usage") or {}
+    if not tu.get("model_calls"):
+        return
+    st.markdown("**Token usage**")
+    st.caption(f"{tu.get('prompt_tokens', 0):,} input ({tu.get('cached_tokens', 0):,} cached) · "
+               f"{tu.get('completion_tokens', 0):,} output ({tu.get('reasoning_tokens', 0):,} reasoning) · "
+               f"{tu.get('model_calls', 0)} model calls · {len(trace.get('compactions') or [])} context compactions")
+    by_phase = trace.get("token_usage_by_phase") or {}
+    if by_phase:
+        st.dataframe([{"phase": agent.PHASES.get(p, p), **v} for p, v in by_phase.items()],
+                     hide_index=True, use_container_width=True)
+    calls = trace.get("model_calls") or []
+    if calls:
+        st.dataframe([{"step": str(c.get("step")), "phase": c.get("phase", ""),
+                       "input": (c.get("usage") or {}).get("prompt_tokens", 0),
+                       "cached": (c.get("usage") or {}).get("cached_tokens", 0),
+                       "output": (c.get("usage") or {}).get("completion_tokens", 0),
+                       "est. context": c.get("estimated_input_tokens", ""), "tool calls": c.get("tool_calls"),
+                       "duration s": c.get("duration_s")} for c in calls], hide_index=True, use_container_width=True)
 
 
 def show_local_trace(trace: dict) -> None:
@@ -355,17 +460,40 @@ def show_local_trace(trace: dict) -> None:
         detail = f"❌ {md(q['error'])}" if q.get("error") else (
             f"{q.get('total_matches')} matches" + (f" · snapshot {', '.join(q.get('snapshot_versions') or [])}"
                                                    if q.get("snapshot_versions") else ""))
-        st.markdown(f"- 🗄️ `{md(q['tool'])}` {what} · {detail}")
+        scope = " · ".join(f"{k} {q[k]}" for k in ("direction", "jurisdiction") if q.get(k) not in (None, "any"))
+        excluded = q.get("excluded") or {}
+        if excluded:
+            detail += f" · excluded {excluded.get('out_of_scope', 0)} out of scope, {excluded.get('unrelated', 0)} unrelated"
+        st.markdown(f"- 🗄️ `{md(q['tool'])}` {what} · {detail}" + (f" · {md(scope)}" if scope else ""))
+        zero = q.get("zero_result_details")
+        if zero:
+            comp = "; ".join(f"{k}: {v.get('row_count')} rows, complete snapshot {v.get('complete_snapshot')}, "
+                             f"{v.get('snapshot_version')}" for k, v in (zero.get("dataset_completeness") or {}).items())
+            st.caption(f"Zero results for `{md(zero.get('query'))}` · strategy {md(zero.get('match_strategy'))} · "
+                       f"filters {md(json.dumps(zero.get('filters'), ensure_ascii=False))} · scope "
+                       f"{md(zero.get('direction'))}/{md(zero.get('jurisdiction'))} · {md(comp)} · "
+                       "NOT proof of an exemption")
 
 
 def show_findings(trace: dict) -> None:
     findings = trace.get("findings") or []
     questions = trace.get("open_questions") or []
     if findings:
-        st.markdown(f"**Recorded findings ({len(findings)})**")
+        c = verification.counters(findings)
+        st.markdown(f"**Recorded findings ({len(findings)})** · sources verified {c['source_verified']}/{c['findings']}"
+                    f" · legal conclusions verified {c['legal_verified']}/{c['legal_conclusions']} · business "
+                    f"advantages verified {c['business_verified']}/{c['business_claims']}")
         for f in findings:
-            mark = "✅ VERIFIED" if f.get("verified") else "❌ UNVERIFIED"
-            st.markdown(f"- {mark}: {md(f['statement'])} ({f['source_url']})  \n  _{md(f.get('verification_note'))}_")
+            status = f.get("source_status") or ("verified" if f.get("verified") else "unverified")
+            line = f"- Source {dim_label(status)}"
+            if f.get("legal_status"):
+                line += f" · Legal {dim_label(f['legal_status'])}"
+            if f.get("business_status"):
+                line += f" · Advantage {dim_label(f['business_status'])}"
+            line += f": {md(f['statement'])} ({f['source_url']})  \n  _{md(f.get('verification_note'))}_"
+            if f.get("negative_claim") and f.get("legal_status") != "verified":
+                line += "  \n  ⛔ _Exemption / no-requirement claim NOT established._"
+            st.markdown(line)
     if questions:
         st.markdown("**Open questions**")
         bullet_list([md(q) for q in questions])
@@ -399,7 +527,18 @@ def show_run_header(record: dict) -> None:
         c[2].metric("Pages read", summary.get("fetches", 0))
         c[3].metric("Local queries", summary.get("local_queries", 0))
         c[4].metric("Candidates", summary.get("candidates", 0))
-        c[5].metric("Findings ✓", f"{summary.get('verified_findings', 0)}/{summary.get('findings', 0)}")
+        c[5].metric("Documents", summary.get("documents", 0))
+        v = summary.get("verification") or {"findings": summary.get("findings", 0),
+                                              "source_verified": summary.get("verified_findings", 0)}
+        d = st.columns(4)
+        d[0].metric("Sources verified", f"{v.get('source_verified', 0)}/{v.get('findings', 0)}",
+                    help="Quote or record retrieved in this run and matched. Not a legal conclusion.")
+        d[1].metric("Legal conclusions verified", f"{v.get('legal_verified', 0)}/{v.get('legal_conclusions', 0)}",
+                    help="Provision, scope, validity, exceptions and classification all verified.")
+        d[2].metric("Business advantages verified", f"{v.get('business_verified', 0)}/{v.get('business_claims', 0)}",
+                    help="Demonstrable advantage over competing importers.")
+        cl = summary.get("checklist") or {}
+        d[3].metric("Unresolved critical questions", cl.get("unresolved", 0) + cl.get("open", 0) if cl else "n/a")
 
 
 def show_live(run_id: str) -> None:
@@ -457,6 +596,13 @@ def show_run(run_id: str) -> None:
         result = ResearchResult.model_validate(record["final_report"])
         if result.research_summary:
             st.markdown(result.research_summary)
+        if result.opportunities:
+            ops = result.opportunities
+            st.caption(f"Opportunities: source verified {sum(o.verification_status == 'verified' for o in ops)}/{len(ops)}"
+                       f" · legal applicability verified {sum(o.legal_verification == 'verified' for o in ops)}/{len(ops)}"
+                       f" · business advantage verified {sum(o.business_verification == 'verified' for o in ops)}/{len(ops)}")
+        if result.unresolved_questions:
+            st.warning("**Unresolved legal questions**\n" + "\n".join(f"- {md(q)}" for q in result.unresolved_questions))
         if not result.opportunities:
             reason = result.no_opportunity_reason
             st.info(f"**{agent.NO_RESULT_MESSAGE}**" + (f"\n\n{reason}" if reason != agent.NO_RESULT_MESSAGE else ""))

@@ -9,7 +9,17 @@ hypotheses worth further business and professional legal validation. You do not 
 ## Tools
 - search_web(query, num_results, phase, purpose): Google search (Israel). Use Hebrew AND English queries.
 - fetch_url(url, phase, purpose): read the actual source (HTML, PDF, JSON, CSV or XLSX). Snippets are NOT \
-evidence; read the source before relying on it.
+evidence; read the source before relying on it. The WHOLE document (every page) is extracted and stored; you get \
+a document_id, its extraction status and a short preview, never the full text of a long document.
+- search_document(document_id, query, start_page, end_page): find passages anywhere in a fetched document, with \
+page numbers (Hebrew/English; numbers match exactly). Use it to locate schedules (תוספת), sections, customs \
+items, standard numbers, definitions and exceptions instead of fetching more pages.
+- read_document_range(document_id, start_page, end_page, tables): read exact pages; continue with `next`.
+- get_document_status(document_id): extraction completeness (pages without text, parser problems). If extraction \
+is incomplete, a provision you cannot find may simply be on an unreadable page.
+- get_evidence(evidence_id): every tool result has an evidence id (E#). Older results are compacted to stubs \
+to save context; get_evidence returns the full original result. A RESEARCH DIGEST message keeps your recorded \
+findings (with quotes), documents, queries already tried and the checklist.
 - search_government_datasets(query, rows, start): discover official datasets on data.gov.il (CKAN). \
 A search hit is discovery only, never evidence.
 - inspect_government_dataset(dataset_id, query): dataset metadata (description, publisher, dates, license, \
@@ -21,12 +31,17 @@ get_local_government_record(dataset, record_id) / get_government_snapshot_status
 snapshots of official data.gov.il datasets (customs tariff and purchase tax book, Free Import Order legal \
 requirements, additional import orders, official standards registry, standards declarations in Reshumot). \
 Indexed and free: query them by customs classification code (exact, parent heading/chapter and child items) \
-or Hebrew/English terms. You only ever receive the matching records, never whole datasets.
+or Hebrew/English terms, or exact technical-standard numbers (ISO 4032, ת"י 1347). Set direction="import" \
+and jurisdiction="israel" for Israeli import questions (export and Autonomy-only orders are otherwise mixed in). \
+You only ever receive the matching records, never whole datasets; unrelated matches are excluded and counted.
 - update_candidates(candidates): record your candidate funnel (name, mechanism, status, reason). \
 Call it whenever candidates are added, rejected or survive. It can be called alongside other tools.
 - record_findings(findings, open_questions): save each finding as soon as it is established (statement, \
-source_url or resource_id, exact excerpt) and any unresolved questions. Findings are saved durably, so a \
-failure later in the run does not lose them; the system checks each excerpt against retrieved content.
+source_url or resource_id, document_id and page, exact excerpt, claim_type) and any unresolved questions. \
+Findings are saved durably and survive context compaction verbatim; the system checks each excerpt.
+- update_checklist(items): the run's critical-evidence checklist (shown in the digest). Mark a question resolved \
+only with evidence references (E#, F#, document_id:page or a retrieved URL); mark it unresolved with the reason \
+when more searching is unlikely to help, and report the strategy you attempted.
 `phase` and `purpose` are shown to the user as progress. `purpose` is one short public sentence \
 such as "Searching Israeli vehicle rental regulations" or "Checking contradictory licensing requirements". \
 Never put private reasoning in it. You may call several tools in one turn.
@@ -69,10 +84,22 @@ legal effective dates.
 - If an official page returns HTTP 401/403, never try to bypass it (no other user agents, proxies, cached \
 or archived copies of the blocked page). The tool may run one search for an accessible official alternative; \
 look for the same text as a gov.il PDF, on main.knesset.gov.il, in Reshumot (רשומות), or as a data.gov.il dataset.
-- A legal finding counts as verified only if its official source was successfully retrieved in this run AND \
-the excerpt you quote from it is found in the retrieved content. A government domain alone verifies nothing. If an important source could not be retrieved, say explicitly that the finding is UNVERIFIED (in red_team \
-and open_legal_questions). Class A requires that all cited primary evidence was retrieved and checked, including \
-official legal text (not only datasets); the system automatically downgrades A to B otherwise.
+- Verification has three SEPARATE dimensions, computed by the system:
+  SOURCE: the quoted text / dataset record was retrieved in this run and the excerpt was found in it.
+  LEGAL APPLICABILITY: the provision itself, its scope, current validity, exceptions and the product \
+classification were each checked against verified official evidence (legal_checks). A verified quote of a rule \
+is NOT a verified legal conclusion.
+  BUSINESS ADVANTAGE: a demonstrable advantage over competing importers (not a rule available to everyone), \
+on top of a verified legal conclusion, with evidence for the differentiator and the competitive situation.
+  Each is VERIFIED, PARTIALLY VERIFIED, UNVERIFIED or CONTRADICTED. A government domain alone verifies nothing. \
+If an important source could not be retrieved, say explicitly that the finding is UNVERIFIED (in red_team and \
+open_legal_questions). Class A requires verified official legal text AND verified legal applicability; the \
+system downgrades A to B otherwise.
+- Negative claims (an exemption, "no requirement applies", "no standard is mandatory") need explicit official \
+legal text. Never present them as established from zero dataset matches, from failing to find a provision, or \
+from an incompletely extracted document; report them as unresolved instead.
+- Do not repeat a search that returned nothing new: change the strategy (other wording or language, the \
+official legal text via search_document, the local datasets, an official alternative source).
 
 ## Method
 1. Map the regulatory environment of the domain: which laws, regulations, orders, regulators and licences apply.
@@ -128,6 +155,21 @@ When you have finished researching (or your budget is nearly exhausted), stop ca
 with the single word DONE. You will then be asked for the structured final report.
 """
 
+COMPLETION_REVIEW_PROMPT = """\
+Before you finish: these critical questions are still unresolved.
+{items}
+
+For each one: (1) name the missing legal evidence; (2) look in what you already have: search_document on the \
+fetched documents and the local official datasets; (3) if needed, a targeted search_web; (4) an accessible \
+official alternative (gov.il PDF, main.knesset.gov.il, Reshumot, data.gov.il), never bypassing blocked pages. \
+Do not repeat searches already attempted without changing the strategy. If more searching is unlikely to \
+resolve a question, call update_checklist with status "unresolved" and the reason. Record what you establish \
+with record_findings and update_checklist.
+You have at most {steps} more steps; when done, reply DONE.
+Web searches already run: {searches_tried}
+Documents already stored (search them first): {documents}
+"""
+
 USER_PROMPT_TEMPLATE = """\
 Research domain: {domain}
 
@@ -148,6 +190,7 @@ FINAL_SCHEMA = """\
 {
   "research_summary": "2-4 sentences on what was investigated and what was found",
   "no_opportunity_reason": "if opportunities is empty, explain why; else empty string",
+  "unresolved_questions": ["critical legal questions that remain open, with what evidence is missing"],
   "opportunities": [
     {
       "name": "",
@@ -160,7 +203,16 @@ FINAL_SCHEMA = """\
       "revenue_model": "",
       "startup_capital_estimate": "e.g. 'ILS 20,000-40,000 (equipment)'",
       "existing_competition": ["competitor or market observation"],
-      "primary_sources": [{"title": "", "url": "", "section": "", "support": "what this source establishes", "excerpt": "verbatim quote (<=300 chars) from the retrieved text or an exact dataset record line", "dataset_id": "", "resource_id": "", "legal_effective_date": "effective date stated in the legal text, if any"}],
+      "claim_type": "positive|negative (negative = exemption / no requirement applies)",
+      "primary_sources": [{"title": "", "url": "", "section": "", "support": "what this source establishes", "excerpt": "verbatim quote (<=300 chars) from the retrieved text or an exact dataset record line", "document_id": "", "page": "", "dataset_id": "", "resource_id": "", "legal_effective_date": "effective date stated in the legal text, if any"}],
+      "legal_checks": {
+        "provision": {"status": "checked|not_checked|contradicted|not_applicable", "finding": "", "evidence": [{"url": "", "excerpt": "", "document_id": "", "page": "", "resource_id": ""}]},
+        "scope": {"status": "", "finding": "", "evidence": []},
+        "validity": {"status": "", "finding": "", "evidence": []},
+        "exceptions": {"status": "", "finding": "", "evidence": []},
+        "product_classification": {"status": "", "finding": "", "evidence": []}
+      },
+      "business_advantage": {"claim": "the advantage over competing importers", "generally_available": false, "differentiator": "why competitors do not get it", "status": "claimed|contradicted|not_claimed", "evidence": [{"url": "", "excerpt": ""}], "competitor_evidence": [{"url": "", "excerpt": ""}]},
       "secondary_sources": [{"title": "", "url": "", "section": "", "support": ""}],
       "contradictory_sources_checked": [{"title": "", "url": "", "section": "", "support": "what was checked and the outcome"}],
       "red_team": ["each attack on the thesis and its outcome; label VERIFIED FACT vs INTERPRETATION"],
@@ -192,6 +244,13 @@ records, quote a record line as shown and set dataset_id/resource_id). Claims wh
 in the retrieved content are treated as unverified.
 - If a key source could not be retrieved (e.g. HTTP 403), state that the related finding is UNVERIFIED and \
 do not classify the opportunity as A. Verification fields are computed by the system; do not add them.
+- legal_checks: for each aspect, status "checked" only if you quote retrieved evidence for it (legal text for \
+provision, scope, validity and exceptions; legal text or an official dataset record for product_classification). \
+Leave "not_checked" when you did not check it: the system treats it as unverified, which is the honest result.
+- business_advantage: set generally_available true if every competing importer can use the same rule; then it \
+is not an advantage by itself.
+- Never present an exemption or a "no requirement" conclusion as established unless explicit legal text was \
+verified; list it in unresolved_questions otherwise. Cite document_id and page for document quotes.
 - scores: integers 0-10 where 10 is MOST FAVORABLE to the founder (legal_risk 10 = very low risk, \
 startup_capital 10 = very little capital needed, competition 10 = little competition, etc.).
 - business_score: integer 0-100 overall attractiveness. confidence: integer 0-100 in the thesis.

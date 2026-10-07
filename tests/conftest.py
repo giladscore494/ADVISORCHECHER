@@ -19,11 +19,18 @@ def _deterministic_network(monkeypatch, request):
 
 @pytest.fixture(autouse=True)
 def _isolated_research_store(monkeypatch, tmp_path):
-    """Every test gets its own durable SQLite research store; the local index is not pre-warmed."""
+    """Every test gets its own durable SQLite research store and document cache; the local index is not
+    pre-warmed. The critical-evidence checklist (and its completion review, which adds a model step) is off
+    unless a test enables it, so scripted model conversations stay deterministic."""
+    import documents
     import research_store
 
     monkeypatch.setenv("RESEARCH_STORE_URL", f"sqlite:///{tmp_path / 'runs.sqlite'}")
     monkeypatch.setenv("GOVDATA_WARMUP", "0")
+    monkeypatch.setenv("DOCUMENT_CACHE_DIR", str(tmp_path / "documents"))
+    monkeypatch.setenv("CRITICAL_EVIDENCE_CHECKLIST", "[]")
     research_store.reset_default_store()
+    documents.reset_default()
     yield
     research_store.reset_default_store()
+    documents.reset_default()

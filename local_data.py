@@ -76,6 +76,79 @@ def is_code_field(name: str) -> bool:
 # The field holding a record's own tariff item. Parent/child (hierarchy) matches use only this field;
 # other classification fields (e.g. the item a legal requirement is attached to) match exactly.
 OWN_CODE_FIELD = "CustomsItemFullClassification"
+# The item a legal requirement is attached to (often a heading); it applies to the items below it.
+REQUIREMENT_CODE_FIELD = "RegularityRequirement_CustomsItemFullClassification"
+# A record's parent item (a link upwards; an exact match here means the record is a child of the query).
+PARENT_LINK_FIELD = "CustomsItemParent_FullClassification"
+# Identifier / bookkeeping fields: a query term matching only here (e.g. RegularityRequirementID 7089 for
+# "ISO 7089") is not a relevant match.
+IDENTIFIER_FIELD_RE = re.compile(r"(^_id$|ID$|Id$|^index$|^TrNumber$|^MaslulMeasurementUnit$|sha256|^file$|^UpdateDate$)")
+DIRECTIONS = ("any", "import", "export")
+JURISDICTIONS = ("any", "israel", "autonomy")
+
+
+def is_identifier_field(name: str) -> bool:
+    return bool(IDENTIFIER_FIELD_RE.search(name))
+
+
+def record_scope(body: dict) -> dict:
+    """Direction (import/export) and regulatory jurisdiction of a record, from its own fields."""
+    scope = {}
+    book = str(body.get("CustomsBookType") or "").strip()
+    book_id = str(body.get("CustomsBookTypeID") or "").strip().split(".")[0]
+    if book or book_id:
+        scope["direction"] = ("import" if book == "יבוא" or (not book and book_id == "1") else
+                              "export" if book == "יצוא" or (not book and book_id == "2") else "unknown")
+    region = str(body.get("AutonomyRegularityRegionType") or "").strip()
+    if region:
+        scope["jurisdiction"] = ("autonomy_only" if "בלבד" in region else
+                                 "israel_and_autonomy" if "ישראל" in region else "unknown")
+        scope["region"] = region
+    return scope
+
+
+def scope_allowed(scope: dict, direction: str, jurisdiction: str) -> bool:
+    d = scope.get("direction")
+    if direction != "any" and d in ("import", "export") and d != direction:
+        return False
+    j = scope.get("jurisdiction")
+    if jurisdiction == "israel" and j == "autonomy_only":
+        return False
+    if jurisdiction == "autonomy" and j not in (None, "autonomy_only", "israel_and_autonomy"):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------- standards
+_SCHEMES = r"ISO(?:/IEC)?|IEC|EN|DIN|ASTM|ANSI|BS|UL|SI|SAE|JIS|NFPA|IEEE"
+# "ISO 4032", "EN 71-1", "SI 562 part 1", "ISO 898-1:2013" (the year after ':' is the edition, not a part)
+STANDARD_RE = re.compile(rf"(?<![A-Za-z])({_SCHEMES})\s*[- ]?\s*(\d{{2,6}})(?:(?:-|\s+part\s+|\s*חלק\s*)(\d{{1,3}}(?:\.\d{{1,2}})?))?",
+                         re.IGNORECASE)
+# Israeli standards: ת"י 1347, ת״י 562 חלק 1, תקן ישראלי 900
+HE_STANDARD_RE = re.compile(r"(?:ת[\"״'׳]י|תקן(?:\s+ישראלי)?(?:\s+רשמי)?)\s*(?:מס['׳]?\s*)?(\d{2,6})"
+                            r"(?:\s*(?:חלק|part)\s*(\d{1,3}(?:\.\d{1,2})?))?")
+
+
+def standard_refs(text: str) -> list[tuple[str, str, str]]:
+    """Technical-standard references in text as (scheme, number, part); ת"י / SI are the same scheme."""
+    refs = []
+    for m in STANDARD_RE.finditer(text or ""):
+        scheme = m.group(1).upper()
+        scheme = "ISO" if scheme.startswith("ISO") else scheme
+        refs.append((scheme, m.group(2).lstrip("0") or "0", m.group(3) or ""))
+    for m in HE_STANDARD_RE.finditer(text or ""):
+        refs.append(("SI", m.group(1).lstrip("0") or "0", m.group(2) or ""))
+    return list(dict.fromkeys(refs))
+
+
+def query_terms(query: str) -> list[str]:
+    """Words (stopwords removed) plus every number in the query: numbers are the most selective terms."""
+    terms = sorted(extract_terms(query))
+    numbers = [t for t in normalize_text(query).split() if t.isdigit() and len(t) >= 2]
+    terms += [n for n in dict.fromkeys(numbers) if n not in terms]
+    if not terms and query:
+        terms = [t for t in normalize_text(query).split() if t]
+    return terms
 
 
 def normalize_code(value, numeric_field: bool = False) -> str:
@@ -407,8 +480,19 @@ class GovernmentData:
         return True
 
     def search(self, dataset: str, query: str, filters: dict | None = None, limit: int = DEFAULT_LIMIT,
-               offset: int = 0) -> dict:
-        """Focused search: customs-code exact / parent / child matches, then full-text (Hebrew + English)."""
+               offset: int = 0, direction: str = "any", jurisdiction: str = "any", fields: list | None = None,
+               include_unrelated: bool = False) -> dict:
+        """Focused, ranked search.
+
+        * Customs codes: exact, parent heading/chapter (also requirements attached at a parent level) and child
+          items.
+        * Technical standards (ISO 4032, EN 71-1, ת"י 1347 חלק 2): exact scheme + number (+ part) only; a shared
+          word such as "ISO" or a substring of another number never counts.
+        * Terms (Hebrew/English): matched per field; numbers must match whole tokens; matches only in identifier
+          fields, or covering under half of the terms, are flagged unrelated and excluded by default.
+        * Scope: direction (import/export) and jurisdiction (Israel vs. Palestinian Autonomy-only orders).
+        Zero results come with the exact query, filters, scope and dataset completeness; they are never proof.
+        """
         datasets = self.dataset_keys() if dataset in ("", "all", "*", None) else [dataset]
         for key in datasets:
             self._current(key)
@@ -416,50 +500,80 @@ class GovernmentData:
         limit = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
         offset = max(0, int(offset or 0))
         query = (query or "").strip()
+        direction = (direction or "any").strip().lower()
+        jurisdiction = (jurisdiction or "any").strip().lower()
+        if direction not in DIRECTIONS:
+            raise LocalDataError(f"direction must be one of {DIRECTIONS}")
+        if jurisdiction not in JURISDICTIONS:
+            raise LocalDataError(f"jurisdiction must be one of {JURISDICTIONS}")
         if not query and not filters:
             raise LocalDataError("query or filters is required")
+        field_names = {key: [f["id"] for f in self.snapshot_meta(key).get("fields", [])] for key in datasets}
+        if fields:
+            if not isinstance(fields, list) or not all(isinstance(f, str) for f in fields):
+                raise LocalDataError("fields must be a list of field names")
+            known = set().union(*field_names.values())
+            unknown = [f for f in fields if f not in known]
+            if unknown:
+                raise LocalDataError(f"Unknown field(s) {unknown}. Fields: {sorted(known)}")
 
-        hits: dict[int, dict] = {}  # records.id -> {"match", "rank", "field"}
+        hits: dict[int, dict] = {}  # records.id -> {"match", "rank", "field", "relevance", "reason"}
 
-        def add(rid, match, rank, field=None):
+        def add(rid, match, rank, field=None, relevance="direct", reason=""):
             cur = hits.get(rid)
             if cur is None or rank < cur["rank"]:
-                hits[rid] = {"match": match, "rank": rank, "field": field}
+                hits[rid] = {"match": match, "rank": rank, "field": field, "relevance": relevance, "reason": reason}
 
+        standards = standard_refs(query)
+        code = "" if standards else code_query(query)
+        strategy = "standard_reference" if standards else ("customs_code" if code else "terms")
         con = self._connect()
         try:
             ds_ph = ",".join("?" * len(datasets))
             in_ds = f"AND r.dataset IN ({ds_ph})"
-            code = code_query(query)
-            if code:
+            if standards:
+                numbers = sorted({n for _, n, _ in standards})
+                rows = con.execute(
+                    f"SELECT f.rowid FROM fts f JOIN records r ON r.id = f.rowid WHERE fts MATCH ? {in_ds} "
+                    f"LIMIT {MAX_CANDIDATES}", (" OR ".join(_fts_term(n) for n in numbers), *datasets)).fetchall()
+                bodies = self._bodies(con, [r for (r,) in rows])
+                for rid, (key, _, body) in bodies.items():
+                    found = self._standard_match(body, standards, fields)
+                    if found:
+                        ref, field = found
+                        add(rid, f"exact_standard ({ref})", 0, field)
+            elif code:
                 hier = hierarchy_key(code)
                 found_code = False
                 for rid, f in con.execute(
                         f"SELECT c.rid, c.field FROM codes c JOIN records r ON r.id = c.rid "
                         f"WHERE (c.code = ? OR c.hier = ?) {in_ds}", (code, hier, *datasets)):
-                    add(rid, "exact_code", 0, f)
+                    add(rid, "exact_code", 0 if f != PARENT_LINK_FIELD else 0.5, f)
                     found_code = True
                 for rid, f in con.execute(
                         f"SELECT c.rid, c.field FROM codes c JOIN records r ON r.id = c.rid "
-                        f"WHERE c.field = ? AND c.hier > ? AND c.hier < ? {in_ds} LIMIT {MAX_CANDIDATES}",
-                        (OWN_CODE_FIELD, hier, hier + "~", *datasets)):
+                        f"WHERE c.field IN (?, ?) AND c.hier > ? AND c.hier < ? {in_ds} LIMIT {MAX_CANDIDATES}",
+                        (OWN_CODE_FIELD, REQUIREMENT_CODE_FIELD, hier, hier + "~", *datasets)):
                     add(rid, "child_code", 2, f)
                     found_code = True
                 sign = "-" if hier.startswith("-") else ""
                 digits = hier.lstrip("-")
                 parents = [sign + digits[:n] for n in range(2, len(digits), 2)]
-                # Parent headings/chapters only for a code that exists; otherwise "1347" (a standard number)
-                # would return all of chapter 13.
+                # Parents only for a code that exists somewhere in the official data; otherwise "1347" (a
+                # standard number) would return all of chapter 13.
+                if parents and not found_code:
+                    found_code = con.execute("SELECT 1 FROM codes WHERE code = ? OR hier = ? LIMIT 1",
+                                             (code, hier)).fetchone() is not None
                 if parents and found_code:
                     ph = ",".join("?" * len(parents))
                     for rid, f, h in con.execute(
                             f"SELECT c.rid, c.field, c.hier FROM codes c JOIN records r ON r.id = c.rid "
-                            f"WHERE c.field = ? AND c.hier IN ({ph}) {in_ds}", (OWN_CODE_FIELD, *parents, *datasets)):
-                        add(rid, f"parent_code ({h})", 1 + (len(digits) - len(h.lstrip('-'))) / 100, f)
+                            f"WHERE c.field IN (?, ?) AND c.hier IN ({ph}) {in_ds}",
+                            (OWN_CODE_FIELD, REQUIREMENT_CODE_FIELD, *parents, *datasets)):
+                        label = "requirement_on_parent_code" if f == REQUIREMENT_CODE_FIELD else "parent_code"
+                        add(rid, f"{label} ({h})", 1 + (len(digits) - len(h.lstrip('-'))) / 100, f)
             # Text search too: a code-like query may be a standard number (ת"י 1347) rather than a tariff item.
-            terms = [code.lstrip("-")] if code else sorted(extract_terms(query))
-            if not terms and query:
-                terms = [t for t in normalize_text(query).split() if t]
+            terms = [] if standards else ([code.lstrip("-")] if code else query_terms(query))
             if terms:
                 rows = con.execute(
                     f"SELECT f.rowid, bm25(fts) FROM fts f JOIN records r ON r.id = f.rowid "
@@ -470,42 +584,71 @@ class GovernmentData:
                     body = bodies.get(rid)
                     if body is None:
                         continue
-                    text = " ".join(str(v) for v in body[2].values() if v is not None)
-                    got = {t for t in terms if matched_terms(token_variants(t), text)}
-                    if not got:
+                    got, where, id_only = self._term_fields(body[2], terms, fields)
+                    if not got and not id_only:
                         continue
                     coverage = len(got) / len(terms)
-                    add(rid, "all_terms" if coverage == 1 else f"terms {sorted(got)}", 3 + (1 - coverage) + bm / 1000)
+                    numbers = [t for t in terms if t.isdigit()]
+                    relevance, reason = "direct", ""
+                    if not got:
+                        relevance, reason = "unrelated", f"terms matched only in identifier fields ({', '.join(sorted(id_only))})"
+                    elif numbers and not any(n in got for n in numbers):
+                        relevance, reason = "unrelated", f"number(s) {numbers} not found in descriptive or code fields"
+                    elif len(terms) > 1 and coverage < 0.5:
+                        relevance, reason = "unrelated", f"only {len(got)} of {len(terms)} terms matched"
+                    elif coverage < 1:
+                        relevance, reason = "weak", f"{len(got)} of {len(terms)} terms matched"
+                    label = "all_terms" if coverage == 1 else f"terms {sorted(got)}"
+                    add(rid, label, 3 + (1 - coverage) + bm / 1000 + (5 if relevance == "unrelated" else 0),
+                        ",".join(sorted(where))[:200] or None, relevance, reason)
             if filters and not query:
                 for (rid,) in con.execute(f"SELECT r.id FROM records r WHERE 1=1 {in_ds}", datasets):
                     add(rid, "filter", 5)
 
             bodies = self._bodies(con, list(hits))
+            nearest = self._nearest_codes(con, datasets, code) if code else {}
         finally:
             con.close()
 
-        ranked = []
+        ranked, excluded_scope, unrelated = [], 0, []
         for rid, info in sorted(hits.items(), key=lambda kv: (kv[1]["rank"], kv[0])):
             key, rec_id, body = bodies[rid]
             if filters_by_ds.get(key) and not self._passes(body, filters_by_ds[key]):
                 continue
-            ranked.append((key, rec_id, info, body))
+            scope = record_scope(body)
+            if not scope_allowed(scope, direction, jurisdiction):
+                excluded_scope += 1
+                continue
+            if info["relevance"] == "unrelated" and not include_unrelated:
+                unrelated.append({"ref": f"{key}:{rec_id}", "reason": info["reason"]})
+                continue
+            ranked.append((key, rec_id, info, body, scope))
 
         page = ranked[offset: offset + limit]
-        results = [self._result(key, rid, body, info) for key, rid, info, body in page]
+        results = [self._result(key, rid, body, info, scope) for key, rid, info, body, scope in page]
         out = {
-            "query": query, "filters": filters or {}, "datasets_searched": datasets,
+            "query": query, "filters": filters or {}, "direction": direction, "jurisdiction": jurisdiction,
+            "datasets_searched": datasets, "match_strategy": strategy,
             "total_matches": len(ranked), "offset": offset, "returned": len(results),
             "next_offset": offset + len(results) if len(ranked) > offset + len(results) else None,
             "records": results,
             "provenance": {key: self.provenance(key) for key in {r["dataset"] for r in results} or datasets},
             "evidence_note": EVIDENCE_NOTE,
         }
+        if excluded_scope or unrelated:
+            out["excluded"] = {"out_of_scope": excluded_scope, "unrelated": len(unrelated),
+                               "unrelated_examples": unrelated[:5]}
+        if fields:
+            out["fields_searched"] = fields
         if code:
             out["code_query"] = {"normalized": code, "hierarchy_key": hierarchy_key(code),
-                                 "match_types": "exact_code > parent_code (heading/chapter) > child_code"}
+                                 "match_types": "exact_code > requirement_on_parent_code / parent_code > child_code"}
+        if standards:
+            out["standard_query"] = [{"scheme": s, "number": n, "part": p} for s, n, p in standards]
         if not results:
             out["note"] = ZERO_RESULT_NOTE
+            out["zero_result_details"] = self._zero_details(datasets, query, filters, direction, jurisdiction,
+                                                            fields, strategy, nearest, out.get("excluded"))
         return out
 
     @staticmethod
@@ -518,13 +661,100 @@ class GovernmentData:
                 out[rid] = (key, rec_id, json.loads(body))
         return out
 
-    def _result(self, key: str, rid: str, body: dict, info: dict | None = None) -> dict:
+    @staticmethod
+    def _standard_match(body: dict, wanted: list[tuple[str, str, str]], fields: list | None):
+        for field, value in body.items():
+            if not isinstance(value, str) or is_identifier_field(field) or (fields and field not in fields):
+                continue
+            for scheme, number, part in standard_refs(value):
+                for w_scheme, w_number, w_part in wanted:
+                    if scheme == w_scheme and number == w_number and (not w_part or part == w_part):
+                        return f"{scheme} {number}" + (f" part {part}" if part else ""), field
+        return None
+
+    @staticmethod
+    def _term_fields(body: dict, terms: list[str], fields: list | None) -> tuple[set, set, set]:
+        """(terms matched in descriptive/code fields, those fields, terms matched only in identifier fields)."""
+        got, where, id_hits = set(), set(), set()
+        for field, value in body.items():
+            if value in (None, ""):
+                continue
+            if fields and field not in fields:
+                continue
+            text = str(value)
+            tokens = None
+            for t in terms:
+                if t.isdigit():
+                    tokens = tokens if tokens is not None else set(normalize_text(text).split())
+                    hit = t in tokens  # whole tokens only; code hierarchy matching is done on the code index
+                else:
+                    hit = bool(matched_terms(token_variants(t), text))
+                if not hit:
+                    continue
+                if is_identifier_field(field):
+                    id_hits.add(t)
+                else:
+                    got.add(t)
+                    where.add(field)
+        return got, where, id_hits - got
+
+    def _nearest_codes(self, con, datasets: list[str], code: str) -> dict:
+        """Headings of the same chapter that DO exist in each dataset (shows coverage around a missing code)."""
+        digits = code.lstrip("-")
+        if len(digits) < 4:
+            return {}
+        out = {}
+        for key in datasets:
+            rows = con.execute(
+                "SELECT substr(c.code, 1, 4) h, count(*) FROM codes c JOIN records r ON r.id = c.rid "
+                "WHERE r.dataset = ? AND c.field = ? AND c.code LIKE ? GROUP BY h",
+                (key, OWN_CODE_FIELD, digits[:2] + "%")).fetchall()
+            rows.sort(key=lambda r: abs(int(r[0]) - int(digits[:4])) if r[0].isdigit() else 1e9)
+            out[key] = [{"heading": h, "records": n} for h, n in rows[:6]]
+        return out
+
+    def _zero_details(self, datasets, query, filters, direction, jurisdiction, fields, strategy, nearest,
+                      excluded) -> dict:
+        completeness = {}
+        status = {d["dataset"]: d for d in self.status()["datasets"]}
+        for key in datasets:
+            validation = self.snapshot_meta(key).get("validation", {})
+            st = status.get(key, {})
+            completeness[key] = {
+                "row_count": validation.get("row_count", st.get("row_count")),
+                "expected_total": validation.get("expected_total"),
+                "complete_snapshot": bool(validation.get("count_matches_total")),
+                "snapshot_version": st.get("snapshot_version"), "retrieved_at": st.get("retrieved_at"),
+                "last_verified_at": st.get("last_verified_at"), "freshness": st.get("freshness"),
+            }
+        details = {
+            "query": query, "filters": filters or {}, "direction": direction, "jurisdiction": jurisdiction,
+            "match_strategy": strategy, "datasets_searched": datasets,
+            "fields_searched": fields or "all descriptive and classification fields (identifier fields excluded)",
+            "dataset_completeness": completeness,
+            "conclusion": "Zero records in these datasets for this query and scope. This is NOT proof of a legal "
+                          "exemption or of the absence of a requirement: requirements can be attached to other "
+                          "codes, worded differently, or set by legal texts outside these datasets.",
+        }
+        if nearest:
+            details["nearest_headings_present"] = nearest
+        if excluded:
+            details["excluded"] = excluded
+        return details
+
+    def _result(self, key: str, rid: str, body: dict, info: dict | None = None, scope: dict | None = None) -> dict:
         fields = {k: _render_value(v) for k, v in body.items()}
         out = {"dataset": key, "record_id": rid, "fields": fields, "record_line": record_line(body),
                "snapshot_version": self._current(key).get("version", ""),
                "resource_id": self.manifest()["resources"][key]["resource_id"]}
         if info:
             out["match"] = info["match"] + (f" in {info['field']}" if info.get("field") else "")
+            out["relevance"] = info.get("relevance", "direct")
+            if info.get("reason"):
+                out["relevance_reason"] = info["reason"]
+        scope = scope or record_scope(body)
+        if scope:
+            out["scope"] = scope
         return out
 
     def get_record(self, dataset: str, record_id) -> dict:

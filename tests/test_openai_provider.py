@@ -208,4 +208,5 @@ def test_agent_end_to_end_through_openai_adapter_uses_serper_and_local_data(clie
     tariff = next(s for s in opp.primary_sources if s.resource_id == TARIFF_RID)
     assert tariff.excerpt_verified and "local official snapshot 20261007T030000Z" in tariff.verification_note
     assert run.trace["token_usage"]["prompt_tokens"] == 400 and run.trace["token_usage"]["reasoning_tokens"] == 28
-    assert EXCERPT in a.retrieved_text[agent.normalize_url(URL)]
+    doc_id = a.url_docs[agent.normalize_url(URL)]
+    assert a.docs.locate_excerpt(doc_id, EXCERPT) == [1]

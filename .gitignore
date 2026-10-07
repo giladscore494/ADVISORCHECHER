@@ -7,3 +7,4 @@ __pycache__/
 release-staging/
 .research_runs/
 .govdata_cache/
+.document_cache/

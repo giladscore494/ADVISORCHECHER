@@ -104,8 +104,10 @@ def test_verified_opportunity_shows_verified_badge(monkeypatch):
         text_response(json.dumps(valid_report(URL))),
     ])
     label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
-    assert "Class A" in label and "✅ Evidence verified" in label
-    assert any("Official evidence verified" in s.value for s in at.success)
+    assert "Class A" in label and "Source ✅" in label and "Legal ✅" in label
+    # No business-advantage evidence was given: that dimension stays unverified and is shown separately.
+    assert "Advantage ❌" in label
+    assert any("Source evidence verified" in s.value for s in at.success)
 
 
 def test_unverified_opportunity_is_flagged_and_downgraded(monkeypatch):
@@ -115,7 +117,7 @@ def test_unverified_opportunity_is_flagged_and_downgraded(monkeypatch):
         text_response(json.dumps(valid_report(blocked))),
     ])
     label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
-    assert "Class B" in label and "❌ Unverified" in label
+    assert "Class B" in label and "Source ❌" in label and "Legal ❌" in label
     errors = " ".join(e.value for e in at.error)
     assert "Legal finding UNVERIFIED" in errors and "Downgraded from A to B" in errors
     md = " ".join(m.value for m in at.markdown)
@@ -160,7 +162,7 @@ def test_dataset_trace_and_provenance_rendered(monkeypatch):
     assert f"]({page})" in md and "records read" in md
     assert "Publisher: משרד הכלכלה והתעשייה" in md and "(not a legal date)" in md
     label = next(e.label for e in at.expander if e.label.startswith("Inspection"))
-    assert "Class A" in label and "✅ Evidence verified" in label
+    assert "Class A" in label and "Source ✅" in label
 
 
 # ------------------------------------------------------------ recovery UI
