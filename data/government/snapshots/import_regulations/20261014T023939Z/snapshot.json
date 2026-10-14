@@ -1,0 +1,165 @@
+{
+  "format_version": 1,
+  "key": "import_regulations",
+  "version": "20261014T023939Z",
+  "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+  "resource_name": "דרישות חוקיות - צוים נוספים",
+  "resource_description": "",
+  "resource_format": "CSV",
+  "resource_created": "2023-03-23T16:39:38.349525",
+  "resource_last_modified": "2026-10-14T02:03:05.731672",
+  "resource_metadata_modified": "2026-10-14T02:03:24.076712",
+  "resource_size": 3018824,
+  "resource_hash": "24ac2dd4bafb3f5c1ed80f8ec2a6c9db",
+  "download_url": "https://e.data.gov.il/dataset/15fd7d7f-da3a-461e-94dd-1dfbbec52a22/resource/d9750b40-c0b9-4e05-a08e-ae768a92e9ca/download/d9750b40-c0b9-4e05-a08e-ae768a92e9ca.csv",
+  "datastore_active": true,
+  "dataset_id": "15fd7d7f-da3a-461e-94dd-1dfbbec52a22",
+  "dataset_name": "regularityrequirement",
+  "dataset_title": "דרישות חוקיות - יבוא ויצוא טובין",
+  "publisher": "רשות המסים בישראל",
+  "license_id": "other-open",
+  "license_title": "Other (Open)",
+  "license_url": "",
+  "dataset_metadata_modified": "2026-10-14T02:03:34.692308",
+  "source_url": "https://data.gov.il/dataset/regularityrequirement/resource/d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+  "metadata_api_url": "https://data.gov.il/api/3/action/resource_show?id=d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+  "retrieved_at": "2026-10-14T02:39:39Z",
+  "retrieval_method": "datastore_search",
+  "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
+  "pages": 1,
+  "fields": [
+    {
+      "id": "_id",
+      "type": "int"
+    },
+    {
+      "id": "RegularityPublicationID",
+      "type": "text"
+    },
+    {
+      "id": "RegularityRequirementID",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItemFullClassification",
+      "type": "text"
+    },
+    {
+      "id": "FullGoodsDescription",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItemCategoryID",
+      "type": "text"
+    },
+    {
+      "id": "MeasurementUnitID",
+      "type": "text"
+    },
+    {
+      "id": "MeasurementUnitDescription",
+      "type": "text"
+    },
+    {
+      "id": "MaslulMeasurementUnit",
+      "type": "text"
+    },
+    {
+      "id": "EndDate",
+      "type": "text"
+    },
+    {
+      "id": "CustomsBookTypeID",
+      "type": "text"
+    },
+    {
+      "id": "CustomsBookType",
+      "type": "text"
+    },
+    {
+      "id": "RegularityRequirement_CustomsItemFullClassification",
+      "type": "text"
+    },
+    {
+      "id": "InterConditionsRelationship",
+      "type": "text"
+    },
+    {
+      "id": "CustomsItemParent_FullClassification",
+      "type": "text"
+    },
+    {
+      "id": "AutonomyRegularityRegionType",
+      "type": "text"
+    },
+    {
+      "id": "RegularityPublication",
+      "type": "text"
+    },
+    {
+      "id": "InceptionCode",
+      "type": "text"
+    },
+    {
+      "id": "RegularitySource",
+      "type": "text"
+    },
+    {
+      "id": "RegularityRequirement_GoodsDescription",
+      "type": "text"
+    },
+    {
+      "id": "RegularityRequirement_Authority",
+      "type": "text"
+    },
+    {
+      "id": "ConfirmationTypeID",
+      "type": "text"
+    },
+    {
+      "id": "ConfirmationType",
+      "type": "text"
+    },
+    {
+      "id": "IsCarnetIncluded",
+      "type": "text"
+    },
+    {
+      "id": "IsPersonalImportIncluded",
+      "type": "text"
+    },
+    {
+      "id": "TrNumber",
+      "type": "text"
+    },
+    {
+      "id": "UpdateDate",
+      "type": "text"
+    }
+  ],
+  "row_count": 3728,
+  "validation": {
+    "row_count": 3728,
+    "expected_total": 3728,
+    "count_matches_total": true,
+    "unique_ids": true,
+    "duplicate_ids": 0,
+    "id_field": "_id",
+    "ids_contiguous_1_to_n": true,
+    "schema_consistent": true,
+    "column_count": 27,
+    "previous_row_count": 3460
+  },
+  "notes": [],
+  "records_sha256": "052960119fc4e285c8f3536891054908178c84334513d1f7777ca1ad74ddd8c8",
+  "uncompressed_bytes": 5660175,
+  "file_name": "records.jsonl.gz",
+  "file_sha256": "17919cd56421ec5cfecd499e564a899b17488f87dcaac997dedb2a6aac99b6ea",
+  "file_bytes": 445060,
+  "encoding": "utf-8",
+  "compression": "gzip",
+  "record_format": "jsonl (one JSON object per line, values exactly as served by the official API)",
+  "metadata_fingerprint": "af7476a2f443729c7c9eef538928a55acbb22ead4c0b57ff29090c23e83da2da",
+  "storage": "repo",
+  "path": "snapshots/import_regulations/20261014T023939Z/records.jsonl.gz"
+}

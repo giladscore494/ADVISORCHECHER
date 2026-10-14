@@ -25,37 +25,37 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=5536eaa1-2e51-406b-aff6-b9ca02801b7c",
         "resource_last_modified": "2026-10-07T02:02:25.598279",
         "dataset_metadata_modified": "2026-10-07T02:02:25.630522",
-        "metadata_fingerprint": "5314ba0de75224d9125e17eccfa8d1841a4d5a4c2a2461f96711935df27b0ee9",
+        "metadata_fingerprint": "8a97021a6912d3266f8898f83cdd34cd3c59d3c89aa6ad63418ddb8dfbc93230",
         "snapshot_json": "snapshots/customs_tariff/20261007T020940Z/snapshot.json",
-        "verified_at": "2026-10-13T02:55:27Z",
-        "checked_at": "2026-10-13T02:55:27Z"
+        "verified_at": "2026-10-14T02:39:12Z",
+        "checked_at": "2026-10-14T02:39:12Z"
       },
       "versions": [
         "20261007T020940Z"
       ],
       "last_attempt": {
-        "at": "2026-10-13T02:55:27Z",
+        "at": "2026-10-14T02:39:12Z",
         "status": "unchanged",
         "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 13173,
-        "duration_s": 8.2,
+        "duration_s": 8.0,
         "requests": 7
       },
-      "last_success_at": "2026-10-13T02:55:27Z"
+      "last_success_at": "2026-10-14T02:39:12Z"
     },
     "free_import_order": {
       "resource_id": "a36db570-09f2-4521-8e3d-0290eb839c68",
       "label": "Legal requirements - Free Import Order (דרישות חוקיות - צו יבוא חופשי)",
       "current": {
-        "version": "20261007T020948Z",
-        "retrieved_at": "2026-10-07T02:09:48Z",
+        "version": "20261014T023920Z",
+        "retrieved_at": "2026-10-14T02:39:20Z",
         "row_count": 28949,
-        "records_sha256": "ae2200dbb23abd32f1f633adcfd7e85498170075dff0c9a81dee0ed732bae22c",
-        "file_sha256": "7a409ba5283c7daeb644437eb745990d5a0af4489969621df4fb0b65e1a4f463",
-        "file_bytes": 1828768,
+        "records_sha256": "46093dba2bd65013806ff9e4f1b8884348114b57aa652130e518aa3b22402d6a",
+        "file_sha256": "5c2e1dd9aab465d88ca2c8d63f913c60318a2c7e82a66ecf1c1e768fa3e8de80",
+        "file_bytes": 1829875,
         "uncompressed_bytes": 41027036,
         "storage": "repo",
-        "path": "snapshots/free_import_order/20261007T020948Z/records.jsonl.gz",
+        "path": "snapshots/free_import_order/20261014T023920Z/records.jsonl.gz",
         "retrieval_method": "datastore_search",
         "dataset_title": "דרישות חוקיות - יבוא ויצוא טובין",
         "dataset_id": "15fd7d7f-da3a-461e-94dd-1dfbbec52a22",
@@ -65,24 +65,29 @@
         "license_url": "",
         "source_url": "https://data.gov.il/dataset/regularityrequirement/resource/a36db570-09f2-4521-8e3d-0290eb839c68",
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=a36db570-09f2-4521-8e3d-0290eb839c68",
-        "resource_last_modified": "2026-10-01T02:03:50.060522",
-        "dataset_metadata_modified": "2026-10-01T02:04:40.023602",
-        "metadata_fingerprint": "af095a8b8115b58c86adb2cee6de2ded8df7ae96a34ce7268961627ff2333f80",
-        "snapshot_json": "snapshots/free_import_order/20261007T020948Z/snapshot.json",
-        "verified_at": "2026-10-07T02:41:31Z",
-        "checked_at": "2026-10-13T02:55:35Z"
+        "resource_last_modified": "2026-10-14T02:03:01.926903",
+        "dataset_metadata_modified": "2026-10-14T02:03:34.692308",
+        "metadata_fingerprint": "40a0530020530020d0a4ec4c49f8d36899ebd6994bc752a46f9639861861a03b",
+        "snapshot_json": "snapshots/free_import_order/20261014T023920Z/snapshot.json",
+        "verified_at": "2026-10-14T02:39:20Z",
+        "checked_at": "2026-10-14T02:39:20Z"
       },
       "versions": [
-        "20261007T020948Z"
+        "20261007T020948Z",
+        "20261014T023920Z"
       ],
       "last_attempt": {
-        "at": "2026-10-13T02:55:35Z",
-        "status": "unchanged",
-        "message": "Official metadata and row total unchanged; download skipped.",
-        "duration_s": 2.9,
-        "requests": 3
+        "at": "2026-10-14T02:39:20Z",
+        "status": "updated",
+        "message": "New validated snapshot 20261014T023920Z.",
+        "rows": 28949,
+        "version": "20261014T023920Z",
+        "storage": "repo",
+        "file_bytes": 1829875,
+        "duration_s": 14.2,
+        "requests": 10
       },
-      "last_success_at": "2026-10-13T02:55:35Z"
+      "last_success_at": "2026-10-14T02:39:20Z"
     },
     "mandatory_standards": {
       "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
@@ -108,41 +113,38 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=1a4d94e2-369a-488d-a223-eb1020612fbd",
         "resource_last_modified": "2026-10-12T17:59:04.034814",
         "dataset_metadata_modified": "2026-10-12T17:59:14.993844",
-        "metadata_fingerprint": "b92e534ea75207666949be8a170931ccc3a53768d3f241ecd6df30a7e009993c",
+        "metadata_fingerprint": "d0c2430649899d990f47b15bb9499d1701f64983b1570fa0c504a622b372c5a9",
         "snapshot_json": "snapshots/mandatory_standards/20261013T025538Z/snapshot.json",
-        "verified_at": "2026-10-13T02:55:38Z",
-        "checked_at": "2026-10-13T02:55:38Z"
+        "verified_at": "2026-10-14T02:39:34Z",
+        "checked_at": "2026-10-14T02:39:34Z"
       },
       "versions": [
         "20261012T025915Z",
         "20261013T025538Z"
       ],
       "last_attempt": {
-        "at": "2026-10-13T02:55:38Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261013T025538Z.",
+        "at": "2026-10-14T02:39:34Z",
+        "status": "unchanged",
+        "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 551,
-        "version": "20261013T025538Z",
-        "storage": "repo",
-        "file_bytes": 149965,
-        "duration_s": 5.8,
+        "duration_s": 4.8,
         "requests": 5
       },
-      "last_success_at": "2026-10-13T02:55:38Z"
+      "last_success_at": "2026-10-14T02:39:34Z"
     },
     "import_regulations": {
       "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
       "label": "Legal requirements - additional orders (דרישות חוקיות - צוים נוספים)",
       "current": {
-        "version": "20261007T021006Z",
-        "retrieved_at": "2026-10-07T02:10:06Z",
-        "row_count": 3460,
-        "records_sha256": "5b757cf9c2ffb8b579b41e4c6639c079e9687eaeb880e678c6b733c2fff17705",
-        "file_sha256": "2cc4434c48ce4b734a34e9cce8e8840c571078db4e708a6eda43f6d18375fd1e",
-        "file_bytes": 415675,
-        "uncompressed_bytes": 5237172,
+        "version": "20261014T023939Z",
+        "retrieved_at": "2026-10-14T02:39:39Z",
+        "row_count": 3728,
+        "records_sha256": "052960119fc4e285c8f3536891054908178c84334513d1f7777ca1ad74ddd8c8",
+        "file_sha256": "17919cd56421ec5cfecd499e564a899b17488f87dcaac997dedb2a6aac99b6ea",
+        "file_bytes": 445060,
+        "uncompressed_bytes": 5660175,
         "storage": "repo",
-        "path": "snapshots/import_regulations/20261007T021006Z/records.jsonl.gz",
+        "path": "snapshots/import_regulations/20261014T023939Z/records.jsonl.gz",
         "retrieval_method": "datastore_search",
         "dataset_title": "דרישות חוקיות - יבוא ויצוא טובין",
         "dataset_id": "15fd7d7f-da3a-461e-94dd-1dfbbec52a22",
@@ -152,24 +154,29 @@
         "license_url": "",
         "source_url": "https://data.gov.il/dataset/regularityrequirement/resource/d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
-        "resource_last_modified": "2026-10-01T02:03:55.004773",
-        "dataset_metadata_modified": "2026-10-01T02:04:40.023602",
-        "metadata_fingerprint": "f5986257fc06da53cc925d7ef01ed1b9b459630656ef266661613e8dbb4bf37a",
-        "snapshot_json": "snapshots/import_regulations/20261007T021006Z/snapshot.json",
-        "verified_at": "2026-10-07T02:41:50Z",
-        "checked_at": "2026-10-13T02:55:44Z"
+        "resource_last_modified": "2026-10-14T02:03:05.731672",
+        "dataset_metadata_modified": "2026-10-14T02:03:34.692308",
+        "metadata_fingerprint": "af7476a2f443729c7c9eef538928a55acbb22ead4c0b57ff29090c23e83da2da",
+        "snapshot_json": "snapshots/import_regulations/20261014T023939Z/snapshot.json",
+        "verified_at": "2026-10-14T02:39:39Z",
+        "checked_at": "2026-10-14T02:39:39Z"
       },
       "versions": [
-        "20261007T021006Z"
+        "20261007T021006Z",
+        "20261014T023939Z"
       ],
       "last_attempt": {
-        "at": "2026-10-13T02:55:44Z",
-        "status": "unchanged",
-        "message": "Official metadata and row total unchanged; download skipped.",
-        "duration_s": 3.0,
-        "requests": 3
+        "at": "2026-10-14T02:39:39Z",
+        "status": "updated",
+        "message": "New validated snapshot 20261014T023939Z.",
+        "rows": 3728,
+        "version": "20261014T023939Z",
+        "storage": "repo",
+        "file_bytes": 445060,
+        "duration_s": 5.7,
+        "requests": 5
       },
-      "last_success_at": "2026-10-13T02:55:44Z"
+      "last_success_at": "2026-10-14T02:39:39Z"
     },
     "standards_declarations": {
       "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
@@ -195,43 +202,43 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d8611d0e-f5c8-4552-8615-da37e920f07b",
         "resource_last_modified": "2026-09-24T11:59:02.434380",
         "dataset_metadata_modified": "2026-10-06T17:59:11.269218",
-        "metadata_fingerprint": "70ac60567d0bbc7c2a218cc4900ec814a625b1ec91911ace446105d063931274",
+        "metadata_fingerprint": "b1e454281a01f38a0947a48d3c5164ae757e54326f70a5604baec02dffae73b0",
         "snapshot_json": "snapshots/standards_declarations/20261007T021011Z/snapshot.json",
-        "verified_at": "2026-10-13T02:55:47Z",
-        "checked_at": "2026-10-13T02:55:47Z"
+        "verified_at": "2026-10-14T02:39:45Z",
+        "checked_at": "2026-10-14T02:39:45Z"
       },
       "versions": [
         "20261007T021011Z"
       ],
       "last_attempt": {
-        "at": "2026-10-13T02:55:47Z",
+        "at": "2026-10-14T02:39:45Z",
         "status": "unchanged",
         "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 686,
-        "duration_s": 4.9,
+        "duration_s": 4.8,
         "requests": 5
       },
-      "last_success_at": "2026-10-13T02:55:47Z"
+      "last_success_at": "2026-10-14T02:39:45Z"
     }
   },
-  "generated_at": "2026-10-13T02:55:52Z",
+  "generated_at": "2026-10-14T02:39:49Z",
   "source": {
     "portal": "https://data.gov.il",
     "api": "https://data.gov.il/api/3/action/",
     "terms": "Data retrieved read-only from data.gov.il under each dataset's license."
   },
   "last_run": {
-    "started_at": "2026-10-13T02:55:27Z",
-    "finished_at": "2026-10-13T02:55:52Z",
-    "requests": 23,
+    "started_at": "2026-10-14T02:39:12Z",
+    "finished_at": "2026-10-14T02:39:49Z",
+    "requests": 32,
     "retries": 0,
     "results": {
       "customs_tariff": "unchanged",
-      "free_import_order": "unchanged",
-      "mandatory_standards": "updated",
-      "import_regulations": "unchanged",
+      "free_import_order": "updated",
+      "mandatory_standards": "unchanged",
+      "import_regulations": "updated",
       "standards_declarations": "unchanged"
     },
-    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/38339164876"
+    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/38502113891"
   }
 }
