@@ -25,24 +25,24 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=5536eaa1-2e51-406b-aff6-b9ca02801b7c",
         "resource_last_modified": "2026-11-01T03:02:08.796120",
         "dataset_metadata_modified": "2026-11-01T03:02:29.308180",
-        "metadata_fingerprint": "897a7c3e18181f29188dba5812d01521fda8dfb3a3b27fb7495e12449b1506d1",
+        "metadata_fingerprint": "c50747dde5728ba37721a0a4ac277b94b81dbbc71811fa8ca8d7b17d26a4f8a7",
         "snapshot_json": "snapshots/customs_tariff/20261102T022834Z/snapshot.json",
-        "verified_at": "2026-11-03T02:28:32Z",
-        "checked_at": "2026-11-03T02:28:32Z"
+        "verified_at": "2026-11-04T02:28:06Z",
+        "checked_at": "2026-11-04T02:28:06Z"
       },
       "versions": [
         "20261101T022836Z",
         "20261102T022834Z"
       ],
       "last_attempt": {
-        "at": "2026-11-03T02:28:32Z",
+        "at": "2026-11-04T02:28:06Z",
         "status": "unchanged",
         "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 13172,
-        "duration_s": 8.2,
+        "duration_s": 8.6,
         "requests": 7
       },
-      "last_success_at": "2026-11-03T02:28:32Z"
+      "last_success_at": "2026-11-04T02:28:06Z"
     },
     "free_import_order": {
       "resource_id": "a36db570-09f2-4521-8e3d-0290eb839c68",
@@ -71,34 +71,34 @@
         "metadata_fingerprint": "1385caebc4c0bbfb7cdc9da98502e65d02381a3786bf69a61ccd77c7433f8fdc",
         "snapshot_json": "snapshots/free_import_order/20261102T022842Z/snapshot.json",
         "verified_at": "2026-11-02T02:28:42Z",
-        "checked_at": "2026-11-03T02:28:40Z"
+        "checked_at": "2026-11-04T02:28:15Z"
       },
       "versions": [
         "20261014T023920Z",
         "20261102T022842Z"
       ],
       "last_attempt": {
-        "at": "2026-11-03T02:28:40Z",
+        "at": "2026-11-04T02:28:15Z",
         "status": "unchanged",
         "message": "Official metadata and row total unchanged; download skipped.",
-        "duration_s": 3.0,
+        "duration_s": 2.9,
         "requests": 3
       },
-      "last_success_at": "2026-11-03T02:28:40Z"
+      "last_success_at": "2026-11-04T02:28:15Z"
     },
     "mandatory_standards": {
       "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
       "label": "Official standards registry (מאגר תקנים רשמיים)",
       "current": {
-        "version": "20261102T022857Z",
-        "retrieved_at": "2026-11-02T02:28:57Z",
+        "version": "20261104T022818Z",
+        "retrieved_at": "2026-11-04T02:28:18Z",
         "row_count": 551,
-        "records_sha256": "36ed9559f28e57665080bafd5f802e08ab027a149338d99794c2a9c79be1c801",
-        "file_sha256": "d265efc76500e5d1ef92b006f0588d919e965388e440fbcfda08b7435e3a6cfb",
-        "file_bytes": 150111,
-        "uncompressed_bytes": 2201441,
+        "records_sha256": "c4708c1d43631398d8504c3dfbdf62c26230169ee70f6b7481b566f5bafe7b21",
+        "file_sha256": "4f099684f79d3f5a6ce39d9a330b70dfeacc1499cf02a87fb22520a523b94f04",
+        "file_bytes": 150170,
+        "uncompressed_bytes": 2202069,
         "storage": "repo",
-        "path": "snapshots/mandatory_standards/20261102T022857Z/records.jsonl.gz",
+        "path": "snapshots/mandatory_standards/20261104T022818Z/records.jsonl.gz",
         "retrieval_method": "datastore_search",
         "dataset_title": "מאגר תקנים רשמיים",
         "dataset_id": "dda8f0aa-8901-473d-a4d6-8b361aa51417",
@@ -108,26 +108,29 @@
         "license_url": "",
         "source_url": "https://data.gov.il/dataset/mandatory-standards/resource/1a4d94e2-369a-488d-a223-eb1020612fbd",
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=1a4d94e2-369a-488d-a223-eb1020612fbd",
-        "resource_last_modified": "2026-11-01T18:59:04.701462",
-        "dataset_metadata_modified": "2026-11-01T18:59:16.619181",
-        "metadata_fingerprint": "fbadd8f1d005581c78a27b525b28e90f281cc643544ec0fb5d07f04aad6ab190",
-        "snapshot_json": "snapshots/mandatory_standards/20261102T022857Z/snapshot.json",
-        "verified_at": "2026-11-03T02:28:43Z",
-        "checked_at": "2026-11-03T02:28:43Z"
+        "resource_last_modified": "2026-11-03T18:59:03.203843",
+        "dataset_metadata_modified": "2026-11-03T18:59:13.993044",
+        "metadata_fingerprint": "5fac4aa94494716aa0f1bfe399594302c1f5825a39b4c3c26b796c26e5c0f52b",
+        "snapshot_json": "snapshots/mandatory_standards/20261104T022818Z/snapshot.json",
+        "verified_at": "2026-11-04T02:28:18Z",
+        "checked_at": "2026-11-04T02:28:18Z"
       },
       "versions": [
-        "20261030T023138Z",
-        "20261102T022857Z"
+        "20261102T022857Z",
+        "20261104T022818Z"
       ],
       "last_attempt": {
-        "at": "2026-11-03T02:28:43Z",
-        "status": "unchanged",
-        "message": "Full download matched the current snapshot checksum; no new version.",
+        "at": "2026-11-04T02:28:18Z",
+        "status": "updated",
+        "message": "New validated snapshot 20261104T022818Z.",
         "rows": 551,
-        "duration_s": 5.6,
+        "version": "20261104T022818Z",
+        "storage": "repo",
+        "file_bytes": 150170,
+        "duration_s": 5.7,
         "requests": 5
       },
-      "last_success_at": "2026-11-03T02:28:43Z"
+      "last_success_at": "2026-11-04T02:28:18Z"
     },
     "import_regulations": {
       "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
@@ -156,20 +159,20 @@
         "metadata_fingerprint": "894fcdf64c3a45e63040ae5e891c46209620437ed820ad9864dbb8773a03192e",
         "snapshot_json": "snapshots/import_regulations/20261102T022902Z/snapshot.json",
         "verified_at": "2026-11-02T02:29:02Z",
-        "checked_at": "2026-11-03T02:28:48Z"
+        "checked_at": "2026-11-04T02:28:24Z"
       },
       "versions": [
         "20261014T023939Z",
         "20261102T022902Z"
       ],
       "last_attempt": {
-        "at": "2026-11-03T02:28:48Z",
+        "at": "2026-11-04T02:28:24Z",
         "status": "unchanged",
         "message": "Official metadata and row total unchanged; download skipped.",
-        "duration_s": 3.0,
+        "duration_s": 2.9,
         "requests": 3
       },
-      "last_success_at": "2026-11-03T02:28:48Z"
+      "last_success_at": "2026-11-04T02:28:24Z"
     },
     "standards_declarations": {
       "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
@@ -195,44 +198,44 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d8611d0e-f5c8-4552-8615-da37e920f07b",
         "resource_last_modified": "2026-10-29T16:59:01.488136",
         "dataset_metadata_modified": "2026-10-29T18:59:16.433842",
-        "metadata_fingerprint": "f07df67f29bc4737b65c0f7b690662338856b4660d30a3c8322d6c630673588b",
+        "metadata_fingerprint": "9bef4ed7342e524134c018310394c006cb2368fe31a093e34f1596325c086b8c",
         "snapshot_json": "snapshots/standards_declarations/20261030T023147Z/snapshot.json",
-        "verified_at": "2026-11-03T02:28:51Z",
-        "checked_at": "2026-11-03T02:28:51Z"
+        "verified_at": "2026-11-04T02:28:26Z",
+        "checked_at": "2026-11-04T02:28:26Z"
       },
       "versions": [
         "20261007T021011Z",
         "20261030T023147Z"
       ],
       "last_attempt": {
-        "at": "2026-11-03T02:28:51Z",
+        "at": "2026-11-04T02:28:26Z",
         "status": "unchanged",
         "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 687,
-        "duration_s": 5.0,
+        "duration_s": 5.3,
         "requests": 5
       },
-      "last_success_at": "2026-11-03T02:28:51Z"
+      "last_success_at": "2026-11-04T02:28:26Z"
     }
   },
-  "generated_at": "2026-11-03T02:28:56Z",
+  "generated_at": "2026-11-04T02:28:32Z",
   "source": {
     "portal": "https://data.gov.il",
     "api": "https://data.gov.il/api/3/action/",
     "terms": "Data retrieved read-only from data.gov.il under each dataset's license."
   },
   "last_run": {
-    "started_at": "2026-11-03T02:28:32Z",
-    "finished_at": "2026-11-03T02:28:56Z",
+    "started_at": "2026-11-04T02:28:06Z",
+    "finished_at": "2026-11-04T02:28:32Z",
     "requests": 23,
     "retries": 0,
     "results": {
       "customs_tariff": "unchanged",
       "free_import_order": "unchanged",
-      "mandatory_standards": "unchanged",
+      "mandatory_standards": "updated",
       "import_regulations": "unchanged",
       "standards_declarations": "unchanged"
     },
-    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/41566276247"
+    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/41760876347"
   }
 }
