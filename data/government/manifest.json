@@ -25,24 +25,24 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=5536eaa1-2e51-406b-aff6-b9ca02801b7c",
         "resource_last_modified": "2026-11-05T03:02:24.589115",
         "dataset_metadata_modified": "2026-11-05T03:02:42.603123",
-        "metadata_fingerprint": "930921efe4b9d57f49bd7f5c8adfea4fcbef3479a48f782b4964c63818db753b",
+        "metadata_fingerprint": "80a9c10b7ceb4af44976af8d81970c9fecda83305eb0fa7e318f445747d8cad1",
         "snapshot_json": "snapshots/customs_tariff/20261106T022901Z/snapshot.json",
-        "verified_at": "2026-11-27T02:30:17Z",
-        "checked_at": "2026-11-27T02:30:17Z"
+        "verified_at": "2026-11-28T02:29:37Z",
+        "checked_at": "2026-11-28T02:29:37Z"
       },
       "versions": [
         "20261105T022919Z",
         "20261106T022901Z"
       ],
       "last_attempt": {
-        "at": "2026-11-27T02:30:17Z",
+        "at": "2026-11-28T02:29:37Z",
         "status": "unchanged",
         "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 13172,
-        "duration_s": 6.9,
+        "duration_s": 8.8,
         "requests": 7
       },
-      "last_success_at": "2026-11-27T02:30:17Z"
+      "last_success_at": "2026-11-28T02:29:37Z"
     },
     "free_import_order": {
       "resource_id": "a36db570-09f2-4521-8e3d-0290eb839c68",
@@ -71,20 +71,20 @@
         "metadata_fingerprint": "ef21064342ee851c4b003408aa591021fafe48d7c70d55d0d6956e98d2d9af70",
         "snapshot_json": "snapshots/free_import_order/20261117T022910Z/snapshot.json",
         "verified_at": "2026-11-24T02:30:40Z",
-        "checked_at": "2026-11-27T02:30:24Z"
+        "checked_at": "2026-11-28T02:29:46Z"
       },
       "versions": [
         "20261102T022842Z",
         "20261117T022910Z"
       ],
       "last_attempt": {
-        "at": "2026-11-27T02:30:24Z",
+        "at": "2026-11-28T02:29:46Z",
         "status": "unchanged",
         "message": "Official metadata and row total unchanged; download skipped.",
-        "duration_s": 2.9,
+        "duration_s": 2.6,
         "requests": 3
       },
-      "last_success_at": "2026-11-27T02:30:24Z"
+      "last_success_at": "2026-11-28T02:29:46Z"
     },
     "mandatory_standards": {
       "resource_id": "1a4d94e2-369a-488d-a223-eb1020612fbd",
@@ -110,27 +110,24 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=1a4d94e2-369a-488d-a223-eb1020612fbd",
         "resource_last_modified": "2026-11-26T18:59:02.384997",
         "dataset_metadata_modified": "2026-11-26T18:59:07.818547",
-        "metadata_fingerprint": "2dac32b6da535b7008ce52709951a5273ae11d7d2a8f958c8a783824752ddc47",
+        "metadata_fingerprint": "f317fdfefcb3da84182bc7a0ee531ddd3910e58c4c44048861b680bb9787a15e",
         "snapshot_json": "snapshots/mandatory_standards/20261127T023027Z/snapshot.json",
-        "verified_at": "2026-11-27T02:30:27Z",
-        "checked_at": "2026-11-27T02:30:27Z"
+        "verified_at": "2026-11-28T02:29:48Z",
+        "checked_at": "2026-11-28T02:29:48Z"
       },
       "versions": [
         "20261104T022818Z",
         "20261127T023027Z"
       ],
       "last_attempt": {
-        "at": "2026-11-27T02:30:27Z",
-        "status": "updated",
-        "message": "New validated snapshot 20261127T023027Z.",
+        "at": "2026-11-28T02:29:48Z",
+        "status": "unchanged",
+        "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 551,
-        "version": "20261127T023027Z",
-        "storage": "repo",
-        "file_bytes": 150103,
-        "duration_s": 4.8,
+        "duration_s": 5.0,
         "requests": 5
       },
-      "last_success_at": "2026-11-27T02:30:27Z"
+      "last_success_at": "2026-11-28T02:29:48Z"
     },
     "import_regulations": {
       "resource_id": "d9750b40-c0b9-4e05-a08e-ae768a92e9ca",
@@ -159,20 +156,20 @@
         "metadata_fingerprint": "2514601e984d1cf596f47b48d3fa31223c85bdf17e25642aab49bb692c091b3a",
         "snapshot_json": "snapshots/import_regulations/20261102T022902Z/snapshot.json",
         "verified_at": "2026-11-24T02:30:59Z",
-        "checked_at": "2026-11-27T02:30:32Z"
+        "checked_at": "2026-11-28T02:29:53Z"
       },
       "versions": [
         "20261014T023939Z",
         "20261102T022902Z"
       ],
       "last_attempt": {
-        "at": "2026-11-27T02:30:32Z",
+        "at": "2026-11-28T02:29:53Z",
         "status": "unchanged",
         "message": "Official metadata and row total unchanged; download skipped.",
         "duration_s": 3.0,
         "requests": 3
       },
-      "last_success_at": "2026-11-27T02:30:32Z"
+      "last_success_at": "2026-11-28T02:29:53Z"
     },
     "standards_declarations": {
       "resource_id": "d8611d0e-f5c8-4552-8615-da37e920f07b",
@@ -198,44 +195,44 @@
         "data_api_url": "https://data.gov.il/api/3/action/datastore_search?resource_id=d8611d0e-f5c8-4552-8615-da37e920f07b",
         "resource_last_modified": "2026-11-08T18:59:17.214058",
         "dataset_metadata_modified": "2026-11-08T18:59:51.438240",
-        "metadata_fingerprint": "19bfc27e52d9582e9e14742109d72d12d679df281235f7cbeea22f53693ca563",
+        "metadata_fingerprint": "29b01fc4ac0ba879d4b4e4740a35d0a1d428b7e96758d1d02f33ef45d464fbd2",
         "snapshot_json": "snapshots/standards_declarations/20261109T022923Z/snapshot.json",
-        "verified_at": "2026-11-27T02:30:34Z",
-        "checked_at": "2026-11-27T02:30:34Z"
+        "verified_at": "2026-11-28T02:29:56Z",
+        "checked_at": "2026-11-28T02:29:56Z"
       },
       "versions": [
         "20261030T023147Z",
         "20261109T022923Z"
       ],
       "last_attempt": {
-        "at": "2026-11-27T02:30:34Z",
+        "at": "2026-11-28T02:29:56Z",
         "status": "unchanged",
         "message": "Full download matched the current snapshot checksum; no new version.",
         "rows": 688,
-        "duration_s": 5.0,
+        "duration_s": 5.3,
         "requests": 5
       },
-      "last_success_at": "2026-11-27T02:30:34Z"
+      "last_success_at": "2026-11-28T02:29:56Z"
     }
   },
-  "generated_at": "2026-11-27T02:30:39Z",
+  "generated_at": "2026-11-28T02:30:02Z",
   "source": {
     "portal": "https://data.gov.il",
     "api": "https://data.gov.il/api/3/action/",
     "terms": "Data retrieved read-only from data.gov.il under each dataset's license."
   },
   "last_run": {
-    "started_at": "2026-11-27T02:30:17Z",
-    "finished_at": "2026-11-27T02:30:39Z",
+    "started_at": "2026-11-28T02:29:37Z",
+    "finished_at": "2026-11-28T02:30:02Z",
     "requests": 23,
     "retries": 0,
     "results": {
       "customs_tariff": "unchanged",
       "free_import_order": "unchanged",
-      "mandatory_standards": "updated",
+      "mandatory_standards": "unchanged",
       "import_regulations": "unchanged",
       "standards_declarations": "unchanged"
     },
-    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/45928656015"
+    "github_run_url": "https://github.com/giladscore494/ADVISORCHECHER/actions/runs/46098292802"
   }
 }
